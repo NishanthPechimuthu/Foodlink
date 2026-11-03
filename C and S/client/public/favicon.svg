@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <circle cx="32" cy="32" r="30" fill="#CC5500"/>
+  <!-- Apple/Sprout motif in cream & chocolate -->
+  <path d="M32 14 C36 10, 42 12, 42 16 C38 18, 34 16, 32 14 Z" fill="#2E7D32"/>
+  <path d="M32 14 C30 18, 28 22, 28 24" stroke="#4E342E" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M32 24 C22 24, 16 30, 16 40 C16 50, 26 54, 32 54 C38 54, 48 50, 48 40 C48 30, 42 24, 32 24 Z" fill="#F8F4E7"/>
+  <!-- Heart center symbolizing community rescue -->
+  <path d="M32 35 C30 32, 26 32, 24 35 C22 38, 25 42, 32 46 C39 42, 42 38, 40 35 C38 32, 34 32, 32 35 Z" fill="#CC5500"/>
+</svg>

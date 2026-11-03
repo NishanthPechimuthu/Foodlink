@@ -1,0 +1,20 @@
+{
+  "name": "food-link",
+  "version": "1.0.0",
+  "description": "Good food deserves another chance - Community Food Rescue Platform",
+  "private": true,
+  "scripts": {
+    "client": "cd client && npm run dev",
+    "server": "cd server && npm run dev",
+    "build": "cd client && npm run build",
+    "install:all": "cd client && npm install && cd ../server && npm install"
+  },
+  "keywords": [
+    "food-waste",
+    "food-rescue",
+    "community",
+    "donation"
+  ],
+  "author": "Food Link Team",
+  "license": "ISC"
+}

@@ -1,0 +1,110 @@
+# Render Blueprint for the Food Link project.
+#
+# Usage:
+#   Render Dashboard -> New -> Blueprint -> select this repository
+#   Render reads this file from the repo root and creates both services.
+#
+# Secrets marked `sync: false` are NOT stored in git. Render prompts for them
+# on the first deploy; edit them later under each service's Environment tab.
+#
+# Service URLs assumed by this file:
+#   API      https://foodlink-a66o.onrender.com
+#   Frontend https://foodlink-client.onrender.com
+# Update CLIENT_URL and the /api/* rewrite destination if the names differ.
+
+services:
+  # ---------------------------------------------------------------------------
+  # API - Node/Express + MongoDB (long-running web service, binds to $PORT)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: foodlink-api
+    runtime: node
+    plan: free
+    branch: main
+    rootDir: "C and S/server"
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+
+      # Public URL of the static site. No trailing slash -
+      # the browser's Origin header never includes one.
+      - key: CLIENT_URL
+        value: https://foodlink-client.onrender.com
+
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: COOKIE_SECRET
+        generateValue: true
+
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+
+      - key: MSG91_AUTH_KEY
+        sync: false
+      - key: MSG91_TEMPLATE_ID
+        sync: false
+      - key: MSG91_SENDER_ID
+        value: FDLINK
+      - key: OTP_EXPIRY_MINUTES
+        value: "5"
+      - key: OTP_RESEND_COOLDOWN_SECONDS
+        value: "60"
+      - key: OTP_DEV_MODE
+        value: "false"
+
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        value: Food Link Administrator
+      - key: ADMIN_PHONE
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # Frontend - Vite build served from Render's CDN (static, no port)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: foodlink-client
+    runtime: static
+    branch: main
+    rootDir: "C and S/client"
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Keep API calls same-origin so the proxy below handles them.
+      # This also keeps the auth cookie (SameSite=Strict) working.
+      - key: VITE_API_BASE_URL
+        value: /api
+      - key: VITE_GOOGLE_CLIENT_ID
+        sync: false
+    routes:
+      # 1. Proxy API traffic to the backend. Must stay ABOVE /* so that
+      #    /api/* is not swallowed by the SPA fallback.
+      - type: rewrite
+        source: /api/*
+        destination: https://foodlink-a66o.onrender.com/api/*
+      # 2. SPA fallback so React Router deep links survive a refresh.
+      - type: rewrite
+        source: /*
+        destination: /index.html

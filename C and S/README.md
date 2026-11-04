@@ -88,7 +88,7 @@ Open two terminal windows:
 ```bash
 cd server
 npm run dev
-# http://localhost:5000
+# http://localhost:5001
 ```
 
 **Terminal 2 — Frontend Application:**

@@ -2,10 +2,17 @@ import axios from 'axios';
 
 /**
  * Centralized Axios instance
- * Configured with credentials enabled to support HttpOnly session cookies
+ * Configured with credentials enabled to support HttpOnly session cookies.
+ *
+ * The default base URL is the relative "/api" path so local development uses
+ * the Vite proxy and same-origin deployments work without extra configuration.
+ * Set VITE_API_BASE_URL to an absolute URL when the frontend and API are
+ * hosted on different origins (e.g. a separately deployed API).
  */
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',

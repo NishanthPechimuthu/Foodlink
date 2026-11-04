@@ -181,7 +181,7 @@ For local development or a **paid** Render instance.
 
    > `EMAIL_FROM` must be the Gmail address you authenticated with, or a verified **Send mail as** alias. Gmail limits free accounts to roughly 500 recipients/day (Workspace ~2,000), which is fine for demos and small deployments but not high-volume production.
 
-   > **Render Free plan limitation:** Render blocks outbound traffic on ports **25, 465, and 587** for Free web services. Gmail SMTP uses 465/587, so email OTP and password-reset emails will **not send** from a Free API instance. Twilio SMS still works because it uses HTTPS. To keep Gmail SMTP, upgrade the API service to a paid instance. To stay on Free, use the **Resend HTTPS fallback** in section 6b.
+   > **Render Free plan limitation:** Render blocks outbound traffic on ports **25, 465, and 587** for Free web services. Gmail SMTP uses 465/587, so email OTP and password-reset emails will **not send** from a Free API instance. Twilio SMS still works because it uses HTTPS. To keep Gmail SMTP, upgrade the API service to a paid instance. To stay on Free, use the **Resend primary provider** in section 6b.
    >
    > Diagnose the server-side configuration with:
    >
@@ -199,18 +199,19 @@ Email is used for:
 - **Donation handover codes** — sent to the donor when a listing is published or a code is regenerated.
 - **Pickup code fallback** — the receiver's collection code is also emailed, in case SMS delivery is delayed.
 
-### 6b. Resend HTTPS fallback (Render Free)
+### 6b. Resend primary (Render Free)
 
-Resend sends over HTTPS (port 443), so it works on Render's Free plan. Keep the
-Gmail SMTP values above for local development; `EMAIL_PROVIDER=auto` uses Resend
-only when `RESEND_API_KEY` is set.
+Resend sends over HTTPS (port 443), so it works on Render's Free plan. It is the
+**primary provider by default** (`EMAIL_PROVIDER=resend`). If Resend fails and
+Gmail SMTP credentials are present, the service automatically retries over SMTP.
+Keep the Gmail SMTP values above for local development or paid deployments.
 
 1. Create a [Resend](https://resend.com/) account and an API key at
    [resend.com/api-keys](https://resend.com/api-keys).
 2. For a quick test, set on the API service:
 
    ```text
-   EMAIL_PROVIDER=auto
+   EMAIL_PROVIDER=resend
    RESEND_API_KEY=re_your_real_key
    RESEND_FROM=Food Link <onboarding@resend.dev>
    EMAIL_DEV_MODE=false
@@ -231,13 +232,16 @@ only when `RESEND_API_KEY` is set.
    > An `@gmail.com` sender will **not** work with Resend unless that domain is
    > verified, which Gmail does not allow.
 
-4. To force a provider, set `EMAIL_PROVIDER=smtp` or `EMAIL_PROVIDER=resend`.
-   With `auto`, a Resend key wins over SMTP credentials.
+4. Provider modes:
+   - `resend` (default): Resend primary, Gmail SMTP fallback.
+   - `auto`: Resend when `RESEND_API_KEY` is set, otherwise Gmail SMTP; the
+     same fallback applies.
+   - `smtp`: Gmail SMTP only.
 
 5. Confirm the deployed configuration in the Render logs:
 
    ```text
-   [Email Service] resend | provider=resend ... from=Food Link <no-reply@yourdomain.com>
+   [Email Service] resend | provider=resend fallback=smtp ... from=Food Link <no-reply@yourdomain.com>
    ```
 
    Then send a real test email:

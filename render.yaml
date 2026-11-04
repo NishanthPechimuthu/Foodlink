@@ -61,7 +61,7 @@ services:
         sync: false
 
       - key: EMAIL_PROVIDER
-        value: auto
+        value: resend
       - key: SMTP_HOST
         value: smtp.gmail.com
       - key: SMTP_PORT
@@ -74,8 +74,8 @@ services:
         sync: false
       - key: EMAIL_FROM
         sync: false
-      # HTTPS email fallback for Render Free (SMTP ports 25/465/587 are blocked).
-      # Set this in the Render dashboard; EMAIL_PROVIDER=auto will prefer it.
+      # HTTPS email provider for Render Free (SMTP ports 25/465/587 are blocked).
+      # Set this in the Render dashboard; Resend is the primary provider.
       - key: RESEND_API_KEY
         sync: false
       - key: RESEND_FROM

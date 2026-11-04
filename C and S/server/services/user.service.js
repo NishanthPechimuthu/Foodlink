@@ -82,6 +82,34 @@ export const userService = {
   },
 
   /**
+   * Update a user's contact phone number.
+   * Phone numbers are not unique, so no duplicate check is performed.
+   */
+  async updatePhone(id, phone) {
+    const normalizedPhone = String(phone || '').trim();
+    if (!normalizedPhone) return null;
+
+    if (isDbConnected()) {
+      return User.findByIdAndUpdate(
+        id,
+        { phone: normalizedPhone },
+        { new: true, runValidators: true }
+      ).exec();
+    }
+
+    for (const user of memoryUsers.values()) {
+      if (user._id === id || user.id === id) {
+        user.phone = normalizedPhone;
+        user.updatedAt = new Date();
+        memoryUsers.set(user.email, user);
+        return user;
+      }
+    }
+
+    return null;
+  },
+
+  /**
    * Find a user by Google ID
    */
   async findByGoogleId(googleId) {

@@ -36,6 +36,7 @@ export default function EmailVerificationModal({
   const resetInputs = () => {
     setCode(['', '', '', '', '', '']);
     setErrorMsg('');
+    setNotice('');
     setTimeLeft(600);
     setResendCooldown(60);
     setTimeout(() => inputRefs.current[0]?.focus(), 150);
@@ -54,6 +55,13 @@ export default function EmailVerificationModal({
           const result = await resendVerification(email);
           if (result?.devCode) setDevCode(result.devCode);
           if (result?.retryAfterSeconds) setResendCooldown(result.retryAfterSeconds);
+          if (result?.emailDelivered === false) {
+            setNotice(
+              'We could not deliver the email yet. Tap "Resend code" to try again.'
+            );
+          } else {
+            setNotice(`A fresh 6-digit code was sent to ${email}.`);
+          }
         } catch (err) {
           setNotice(
             err.response?.data?.message ||
@@ -164,10 +172,20 @@ export default function EmailVerificationModal({
       setResendCooldown(result?.retryAfterSeconds || 60);
       setTimeLeft(600);
       setDevCode(result?.devCode || '');
-      sileo.info({
-        title: 'New Code Sent',
-        description: `We sent a fresh 6-digit code to ${email}.`,
-      });
+
+      if (result?.emailDelivered === false) {
+        setNotice('We could not deliver the email yet. Please try again shortly.');
+        sileo.warning({
+          title: 'Email Not Sent',
+          description: 'We could not deliver the code yet. Please tap "Resend code" again shortly.',
+        });
+      } else {
+        setNotice(`A fresh 6-digit code was sent to ${email}.`);
+        sileo.info({
+          title: 'New Code Sent',
+          description: `We sent a fresh 6-digit code to ${email}.`,
+        });
+      }
     } catch (err) {
       if (err.response?.data?.retryAfterSeconds) {
         setResendCooldown(err.response.data.retryAfterSeconds);

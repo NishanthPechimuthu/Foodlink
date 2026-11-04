@@ -298,7 +298,11 @@ export default function OTPVerificationModal({
               Verify Food Donation
             </h2>
             <p className="mt-1 text-xs sm:text-sm text-chocolate/70 max-w-xs mx-auto">
-              Please enter the 6-digit security code sent to your registered phone to confirm this listing.
+              Please enter the 6-digit security code sent to{' '}
+              <strong className="text-chocolate">
+                {verificationData?.phone || 'your registered phone'}
+              </strong>{' '}
+              to confirm this listing.
             </p>
           </div>
 

@@ -1,10 +1,43 @@
 import './env.js';
 import mongoose from 'mongoose';
+import User from '../models/user.model.js';
 
 // Helper to mask credentials in connection URI for safe logging
 export const sanitizeUri = (uri) => {
   if (!uri) return 'undefined';
   return uri.replace(/\/\/(.*?)@/, '//***:***@');
+};
+
+/**
+ * Older versions of the app may have created a unique index on users.phone.
+ * MongoDB keeps indexes even after the Mongoose schema stops declaring them,
+ * so a stale `phone_1` index can make manual registration fail with E11000
+ * when two accounts share a contact number. Phone numbers are intentionally
+ * NOT unique in this app, so remove any legacy unique phone index on startup.
+ */
+export const dropLegacyPhoneUniqueIndex = async () => {
+  try {
+    const indexes = await User.collection.indexes();
+    const legacyIndex = indexes.find(
+      (index) => index.unique && index.key && index.key.phone === 1
+    );
+
+    if (!legacyIndex) return false;
+
+    await User.collection.dropIndex(legacyIndex.name);
+    console.log(
+      `[Database] Dropped legacy unique index "${legacyIndex.name}" on users.phone (phone numbers are not unique).`
+    );
+    return true;
+  } catch (error) {
+    // The users collection may not exist yet on a brand-new database.
+    if (error.code === 26 || error.codeName === 'NamespaceNotFound') return false;
+
+    console.warn(
+      `[Database Warning] Could not remove a legacy unique users.phone index: ${error.message}`
+    );
+    return false;
+  }
 };
 
 export const connectDB = async () => {
@@ -24,6 +57,10 @@ export const connectDB = async () => {
     });
 
     console.log(`[Database] MongoDB Connected successfully to: ${conn.connection.host}/${conn.connection.name}`);
+
+    // Remove stale unique phone indexes left behind by older schema versions.
+    await dropLegacyPhoneUniqueIndex();
+
     return conn;
   } catch (error) {
     console.warn(`[Database Warning] Could not connect to MongoDB at "${sanitized}".`);

@@ -78,7 +78,8 @@ export default function LoginPage() {
         setVerificationOpen(true);
         sileo.warning({
           title: 'Email Not Verified',
-          description: 'Enter the new 6-digit code we just sent to your inbox.',
+          description:
+            'Enter the 6-digit code sent to your email, or tap "Resend code" in the verification window.',
         });
         return;
       }

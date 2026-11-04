@@ -51,10 +51,11 @@ if (hasCredentials) {
       user: smtpUser,
       pass: smtpPass,
     },
-    // Fail reasonably fast instead of hanging a request for minutes.
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 20_000,
+    // Fail reasonably fast instead of hanging a request for minutes. The API
+    // client times out after 10 seconds, so stay comfortably below that.
+    connectionTimeout: 5_000,
+    greetingTimeout: 5_000,
+    socketTimeout: 8_000,
   });
 }
 

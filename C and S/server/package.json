@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "seed:admin": "node scripts/seedAdmin.js",
     "seed:food": "node scripts/seedFoodData.js",
+    "migrate:drop-phone-index": "node scripts/dropPhoneUniqueIndex.js",
     "test:auth": "node tests/auth.test.js",
     "test:phase4": "node tests/phase4.test.js"
   },

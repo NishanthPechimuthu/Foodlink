@@ -25,6 +25,9 @@ const userSchema = new mongoose.Schema(
     phone: {
       type: String,
       required: [true, 'Phone number is required'],
+      // Deliberately NOT unique: households, NGOs and businesses can share a
+      // contact number across multiple accounts. A legacy `phone_1` index is
+      // cleaned up when the database connection is established.
       trim: true,
       match: [
         /^[0-9+()-\s]{8,20}$/,

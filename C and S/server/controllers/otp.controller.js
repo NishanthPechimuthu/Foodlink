@@ -1,12 +1,28 @@
 import otpService from '../services/otp.service.js';
+import { userService } from '../services/user.service.js';
 import FoodListing from '../models/foodListing.model.js';
 import FoodRequest from '../models/foodRequest.model.js';
 import ActivityLog from '../models/activityLog.model.js';
 import emailService from '../services/email.service.js';
+import { normalizePhoneNumber } from '../services/sms.service.js';
 import { generateNumericCode, hashCode } from '../utils/codes.js';
 
 const DONATION_CODE_SCOPE = 'donation-handover';
 const donationCodeHash = (code) => hashCode(code, DONATION_CODE_SCOPE);
+
+/**
+ * Returns true when a phone number can actually receive an SMS.
+ * Google OAuth accounts get `+91 00000 00000` as a placeholder, and some
+ * older records may have an empty or all-zero number. Those must prompt the
+ * donor for a real number before an OTP is requested.
+ */
+export const isUsablePhone = (phone) => {
+  const digits = normalizePhoneNumber(phone).replace(/\D/g, '');
+  if (digits.length < 10 || digits.length > 15) return false;
+
+  const local = digits.startsWith('91') ? digits.slice(2) : digits;
+  return Boolean(local) && !/^0+$/.test(local);
+};
 
 const quantityLabel = (listing) =>
   `${listing.quantity} ${listing.quantityUnit}`.trim();
@@ -45,7 +61,30 @@ export const sendListingOtp = async (req, res, next) => {
       });
     }
 
-    const contactPhone = phone || req.user.phone || '+91 98765 43210';
+    const contactPhone = [phone, req.user.phone]
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .find(isUsablePhone);
+
+    if (!contactPhone) {
+      return res.status(400).json({
+        success: false,
+        code: 'PHONE_REQUIRED',
+        message:
+          'Add a mobile number to receive your SMS verification code. We will save it to your profile so receivers can contact you.',
+      });
+    }
+
+    // If the account had no real phone yet (for example a Google sign-up with
+    // the placeholder number), save the number the donor just provided.
+    let phoneSaved = false;
+    if (!isUsablePhone(req.user.phone) && isUsablePhone(contactPhone)) {
+      try {
+        const updatedUser = await userService.updatePhone(donorId, contactPhone);
+        phoneSaved = Boolean(updatedUser);
+      } catch (saveError) {
+        console.warn('[OTP] Could not save the donor phone number:', saveError.message);
+      }
+    }
 
     const result = await otpService.createVerification({
       donorId,
@@ -61,6 +100,8 @@ export const sendListingOtp = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: `Verification code sent to ${contactPhone}. Please enter it to publish your listing.`,
+      phone: contactPhone,
+      phoneSaved,
       ...result,
     });
   } catch (error) {

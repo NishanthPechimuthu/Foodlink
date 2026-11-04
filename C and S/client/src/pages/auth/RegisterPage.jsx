@@ -115,17 +115,26 @@ export default function RegisterPage() {
         password: formData.password,
       });
 
-      // New accounts must confirm the 6-digit code emailed by Resend before
-      // they can sign in.
+      // New accounts must confirm the 6-digit code emailed via Gmail SMTP
+      // before they can sign in.
       if (data.requiresEmailVerification) {
         setVerificationEmail(data.email || formData.email.trim());
         setVerificationDevCode(data.devCode || '');
         setVerificationOpen(true);
 
-        sileo.success({
-          title: 'Check your email',
-          description: data.message || 'We sent you a 6-digit verification code.',
-        });
+        if (data.emailDelivered === false) {
+          sileo.warning({
+            title: 'Email delivery delayed',
+            description:
+              data.message ||
+              'Your account was created, but the verification email could not be sent yet. Use "Resend code" on the next screen to try again.',
+          });
+        } else {
+          sileo.success({
+            title: 'Check your email',
+            description: data.message || 'We sent you a 6-digit verification code.',
+          });
+        }
         return;
       }
 

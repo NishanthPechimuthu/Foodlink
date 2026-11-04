@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X,
@@ -12,6 +12,7 @@ import {
   FileText,
   Sparkles,
   Upload,
+  Phone,
 } from 'lucide-react';
 import { sileo } from 'sileo';
 import Button from '../common/Button';
@@ -19,9 +20,10 @@ import otpService from '../../services/otp.service';
 import api from '../../services/api';
 import OTPVerificationModal from './OTPVerificationModal';
 import { useAuth } from '../../context/AuthContext';
+import { isUsablePhone } from '../../utils/phone';
 
 export default function AddFoodModal({ isOpen, onClose, onListingCreated }) {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
 
   // Initial preparation & expiry defaults
   const now = new Date();
@@ -62,6 +64,19 @@ export default function AddFoodModal({ isOpen, onClose, onListingCreated }) {
   const [otpModalOpen, setOtpModalOpen] = useState(false);
   const [verificationData, setVerificationData] = useState(null);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [contactPhone, setContactPhone] = useState(() =>
+    isUsablePhone(user?.phone) ? user.phone.trim() : ''
+  );
+
+  const storedPhone = user?.phone || '';
+  const needsPhone = !isUsablePhone(storedPhone);
+
+  // Keep the field in sync if the authenticated user loads/changes after mount.
+  useEffect(() => {
+    if (!contactPhone && isUsablePhone(storedPhone)) {
+      setContactPhone(storedPhone.trim());
+    }
+  }, [storedPhone, contactPhone]);
 
   const handleFileSelect = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -171,6 +186,11 @@ export default function AddFoodModal({ isOpen, onClose, onListingCreated }) {
       newErrors.city = 'City is required for pickup coordination';
     }
 
+    if (!isUsablePhone(contactPhone) && !isUsablePhone(storedPhone)) {
+      newErrors.contactPhone =
+        'A mobile number is required to receive the SMS verification code';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -194,11 +214,20 @@ export default function AddFoodModal({ isOpen, onClose, onListingCreated }) {
         images: imageUrlInput.trim() ? [imageUrlInput.trim()] : formData.images,
       };
 
-      // Request OTP from backend
+      // Request OTP from backend. Use the number entered by the user when the
+      // account has no real phone yet (for example a Google OAuth sign-up).
+      const phoneToUse = isUsablePhone(contactPhone)
+        ? contactPhone.trim()
+        : storedPhone.trim();
+
       const result = await otpService.sendListingOtp({
-        phone: user?.phone || '+91 98765 43210',
+        phone: phoneToUse,
         listingData: payload,
       });
+
+      if (result.phoneSaved && refreshUser) {
+        await refreshUser();
+      }
 
       setVerificationData(result);
       setOtpModalOpen(true);
@@ -489,6 +518,41 @@ export default function AddFoodModal({ isOpen, onClose, onListingCreated }) {
                   />
                 </div>
               </div>
+
+              {/* 6b. Contact mobile number (only when the account has none) */}
+              {needsPhone && (
+                <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200">
+                  <div className="flex items-center gap-2 text-xs font-bold font-heading text-amber-900 mb-2">
+                    <Phone className="w-4 h-4" />
+                    <span>Mobile Number for SMS Verification *</span>
+                  </div>
+                  <input
+                    type="tel"
+                    value={contactPhone}
+                    onChange={(e) => {
+                      setContactPhone(e.target.value);
+                      if (errors.contactPhone) {
+                        setErrors({ ...errors, contactPhone: null });
+                      }
+                    }}
+                    placeholder="+91 98765 43210"
+                    className={`w-full px-3.5 py-2.5 rounded-xl bg-white border text-sm text-chocolate focus:outline-none focus:ring-2 transition-all ${
+                      errors.contactPhone
+                        ? 'border-softRed'
+                        : 'border-amber-300 focus:border-burntOrange'
+                    }`}
+                  />
+                  {errors.contactPhone && (
+                    <p className="mt-1 text-xs text-softRed font-semibold">
+                      {errors.contactPhone}
+                    </p>
+                  )}
+                  <p className="mt-2 text-[11px] text-amber-900/80 leading-snug">
+                    We need a mobile number to text your one-time verification code. It will be
+                    saved to your profile and shown to the receiver for pickup coordination.
+                  </p>
+                </div>
+              )}
 
               {/* 7. Image Upload & Preview */}
               <div>

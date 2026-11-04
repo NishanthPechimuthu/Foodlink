@@ -11,6 +11,7 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const EMAIL_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const EMAIL_RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
 const EMAIL_MAX_ATTEMPTS = 5;
+const EMAIL_DISPATCH_TIMEOUT_MS = 7 * 1000; // below the client's 10s request timeout
 
 // Google OAuth client instance
 const googleClient = process.env.GOOGLE_CLIENT_ID ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID) : null;
@@ -81,13 +82,33 @@ const issueEmailVerificationCode = async (user) => {
   return code;
 };
 
-const dispatchVerificationEmail = async (user, code) =>
-  emailService.sendVerificationEmail({
+const dispatchVerificationEmail = async (user, code) => {
+  const delivery = emailService.sendVerificationEmail({
     to: user.email,
     name: user.fullName || 'there',
     code,
     expiresMinutes: EMAIL_CODE_TTL_MS / 60000,
   });
+
+  // Never let a slow SMTP server make registration/resend requests exceed the
+  // client's HTTP timeout. The email service already catches its own errors;
+  // this race only guards against a stalled connection.
+  const timeout = new Promise((resolve) => {
+    setTimeout(
+      () => resolve({ success: false, mode: 'timeout', error: 'Email delivery timed out' }),
+      EMAIL_DISPATCH_TIMEOUT_MS
+    );
+  });
+
+  try {
+    return await Promise.race([delivery, timeout]);
+  } catch (error) {
+    // Email delivery must never make account creation fail. The account is
+    // already saved; the user can request another code from the modal.
+    console.error('[Email Service] Verification email dispatch failed:', error.message);
+    return { success: false, mode: 'error', error: error.message };
+  }
+};
 
 /**
  * POST /api/auth/register
@@ -99,6 +120,17 @@ export const register = async (req, res, next) => {
     // Check for existing account
     const existing = await userService.findByEmail(email);
     if (existing) {
+      // A Google-created account cannot be converted to a password account by
+      // registering again. Tell the user exactly which button to use.
+      if (existing.authProvider === 'google') {
+        return res.status(409).json({
+          success: false,
+          code: 'USE_GOOGLE_SIGN_IN',
+          message:
+            'This email is already registered with Google. Please use "Continue with Google" to sign in.',
+        });
+      }
+
       // If the account exists but was never verified, resend instead of failing
       // so users who lost the first email are not permanently stuck.
       if (
@@ -113,7 +145,9 @@ export const register = async (req, res, next) => {
           success: true,
           requiresEmailVerification: true,
           email: existing.email,
-          message: 'Your account is not verified yet. We sent a fresh verification code to your email.',
+          message: delivery.success
+            ? 'Your account is not verified yet. We sent a fresh verification code to your email.'
+            : 'Your account is not verified yet. We could not send the email right now — use "Resend code" in the verification screen to try again.',
           emailDelivered: delivery.success,
           expiresInMinutes: EMAIL_CODE_TTL_MS / 60000,
           ...(emailService.isDevMode ? { devCode: code } : {}),
@@ -155,12 +189,38 @@ export const register = async (req, res, next) => {
       success: true,
       requiresEmailVerification: true,
       email: newUser.email,
-      message: `We sent a 6-digit verification code to ${newUser.email}. Enter it to activate your account.`,
+      message: delivery.success
+        ? `We sent a 6-digit verification code to ${newUser.email}. Enter it to activate your account.`
+        : `Your account was created, but we could not send the email to ${newUser.email} right now. Use "Resend code" in the verification screen to try again.`,
       emailDelivered: delivery.success,
       expiresInMinutes: EMAIL_CODE_TTL_MS / 60000,
       ...(emailService.isDevMode ? { devCode: code } : {}),
     });
   } catch (error) {
+    // A stale unique index or a race can still surface as E11000. Return a
+    // helpful message instead of a generic 500. Phone numbers are not meant to
+    // be unique, so that case is reported separately.
+    if (error?.code === 11000) {
+      const duplicateField = Object.keys(error.keyPattern || error.keyValue || {})[0];
+
+      if (duplicateField === 'phone') {
+        return res.status(409).json({
+          success: false,
+          code: 'PHONE_ALREADY_REGISTERED',
+          message:
+            'That mobile number is already linked to another account. Phone numbers are not meant to be unique — please try again in a moment or use a different number.',
+        });
+      }
+
+      if (duplicateField === 'email') {
+        return res.status(400).json({
+          success: false,
+          message:
+            'An account with this email address already exists. Please log in or use a different email.',
+        });
+      }
+    }
+
     next(error);
   }
 };
@@ -281,6 +341,9 @@ export const resendVerification = async (req, res, next) => {
 
     return res.status(200).json({
       ...genericResponse,
+      message: delivery.success
+        ? genericResponse.message
+        : 'We could not send the verification email right now. Please try again shortly.',
       emailDelivered: delivery.success,
       expiresInMinutes: EMAIL_CODE_TTL_MS / 60000,
       ...(emailService.isDevMode ? { devCode: code } : {}),
@@ -443,11 +506,16 @@ export const googleAuth = async (req, res, next) => {
     let user = await userService.findByEmail(googleUser.email);
 
     if (user) {
-      // Existing user: Link Google ID if not present
+      // Existing user: Link Google ID if not present. Google already verified
+      // this email address, so an unverified local account can be activated.
       if (!user.googleId) {
         user.googleId = googleUser.googleId;
-        if (typeof user.save === 'function') await user.save();
       }
+      if (!user.isVerified && googleUser.isEmailVerified) {
+        user.isVerified = true;
+        user.emailVerifiedAt = new Date();
+      }
+      if (typeof user.save === 'function') await user.save();
       return sendAuthSession(res, 200, `Welcome back, ${user.fullName}!`, user);
     }
 
@@ -468,6 +536,17 @@ export const googleAuth = async (req, res, next) => {
 
     return sendAuthSession(res, 201, `Welcome to Food Link, ${user.fullName}!`, user);
   } catch (error) {
+    if (error?.code === 11000) {
+      const duplicateField = Object.keys(error.keyPattern || error.keyValue || {})[0];
+      return res.status(409).json({
+        success: false,
+        code: duplicateField === 'phone' ? 'PHONE_ALREADY_REGISTERED' : 'ACCOUNT_ALREADY_EXISTS',
+        message:
+          duplicateField === 'phone'
+            ? 'That mobile number is already linked to another account. Phone numbers are not meant to be unique — please try again or use a different number.'
+            : 'An account with this email address already exists. Please sign in instead.',
+      });
+    }
     next(error);
   }
 };

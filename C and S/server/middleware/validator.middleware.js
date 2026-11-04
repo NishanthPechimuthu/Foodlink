@@ -100,6 +100,45 @@ export const validateLogin = (req, res, next) => {
   next();
 };
 
+export const validateVerifyEmail = (req, res, next) => {
+  const { email, code } = req.body;
+  const errors = {};
+
+  if (!email || typeof email !== 'string' || !EMAIL_REGEX.test(email.trim())) {
+    errors.email = 'Please provide the email address used to register';
+  }
+
+  if (!code || !/^[0-9]{6}$/.test(String(code).trim())) {
+    errors.code = 'Enter the 6-digit verification code from your email';
+  }
+
+  if (Object.keys(errors).length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Please provide a valid email address and the 6-digit verification code.',
+      errors,
+    });
+  }
+
+  req.body.email = email.trim().toLowerCase();
+  req.body.code = String(code).trim();
+  next();
+};
+
+export const validateResendVerification = (req, res, next) => {
+  const { email } = req.body;
+
+  if (!email || typeof email !== 'string' || !EMAIL_REGEX.test(email.trim())) {
+    return res.status(400).json({
+      success: false,
+      message: 'Please provide the email address used to register.',
+    });
+  }
+
+  req.body.email = email.trim().toLowerCase();
+  next();
+};
+
 export const validateForgotPassword = (req, res, next) => {
   const { email } = req.body;
 

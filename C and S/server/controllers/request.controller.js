@@ -4,6 +4,42 @@ import FoodListing from '../models/foodListing.model.js';
 import DonationRecord from '../models/donationRecord.model.js';
 import ActivityLog from '../models/activityLog.model.js';
 import notificationService from '../services/notification.service.js';
+import pickupOtpService from '../services/pickupOtp.service.js';
+import emailService from '../services/email.service.js';
+import { generateNumericCode, hashCode } from '../utils/codes.js';
+
+const DONATION_CODE_SCOPE = 'donation-handover';
+const donationCodeHash = (code) => hashCode(code, DONATION_CODE_SCOPE);
+const MAX_DONATION_CODE_ATTEMPTS = 5;
+
+/**
+ * Ensure a listing has a handover code. Legacy/seeded listings created before
+ * handover codes existed get one on first "ready for pickup".
+ * Returns the plaintext code when a new one was created, otherwise null.
+ */
+const ensureDonationCode = async (listing, donorUser) => {
+  if (!listing || listing.donationCodeHash) return null;
+
+  const code = generateNumericCode(6);
+  listing.donationCodeHash = donationCodeHash(code);
+  listing.donationCodeIssuedAt = new Date();
+  listing.donationCodeVerifiedAt = null;
+  await listing.save();
+
+  const emailTo = donorUser?.email;
+  if (emailTo) {
+    await emailService.sendDonationCodeEmail({
+      to: emailTo,
+      name: donorUser.fullName || 'there',
+      listingTitle: listing.title,
+      donationCode: code,
+      quantityLabel: `${listing.quantity} ${listing.quantityUnit}`,
+      expiresAt: listing.expiresAt,
+    });
+  }
+
+  return code;
+};
 
 /**
  * Helper to convert food quantity to normalized weight in Kilograms
@@ -381,7 +417,9 @@ export const markReadyForPickup = async (req, res, next) => {
     const donorId = req.user._id || req.user.id;
     const { id } = req.params;
 
-    const request = await FoodRequest.findById(id).populate('listing');
+    const request = await FoodRequest.findById(id)
+      .populate('listing')
+      .populate('receiver', 'fullName phone email');
     if (!request) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
@@ -401,6 +439,51 @@ export const markReadyForPickup = async (req, res, next) => {
     request.readyAt = new Date();
     await request.save();
 
+    // Guarantee the donor has a handover code (legacy listings included)
+    const listingWithCode = await FoodListing.findById(request.listing._id).select(
+      '+donationCodeHash'
+    );
+    let newDonationCode = null;
+    if (listingWithCode && !listingWithCode.donationCodeHash) {
+      newDonationCode = await ensureDonationCode(listingWithCode, req.user);
+    }
+
+    // Issue the receiver's pickup OTP and deliver it by SMS (and email fallback)
+    let pickupOtpSent = false;
+    let pickupDevOtp = null;
+    let pickupCodeForEmail = null;
+    let pickupWarning = null;
+
+    const receiverPhone = request.receiver?.phone || req.user.phone;
+    if (receiverPhone) {
+      try {
+        const issued = await pickupOtpService.issue({
+          requestId: request._id,
+          receiverId: request.receiver?._id || request.receiver,
+          phone: receiverPhone,
+          listingTitle: request.listing.title,
+        });
+        pickupOtpSent = true;
+        pickupDevOtp = issued.devOtp || null;
+        pickupCodeForEmail = issued.code || null;
+      } catch (otpError) {
+        console.warn('[Pickup OTP] Could not dispatch SMS:', otpError.message);
+        pickupWarning = otpError.message;
+      }
+    } else {
+      pickupWarning = 'The receiver has no phone number on file, so no pickup SMS was sent.';
+    }
+
+    if (request.receiver?.email && pickupCodeForEmail) {
+      await emailService.sendCollectionOtpEmail({
+        to: request.receiver.email,
+        name: request.receiver.fullName || 'there',
+        listingTitle: request.listing.title,
+        code: pickupCodeForEmail,
+        expiresMinutes: 10,
+      }).catch(() => {});
+    }
+
     await ActivityLog.create({
       user: donorId,
       action: 'READY_FOR_PICKUP',
@@ -411,18 +494,24 @@ export const markReadyForPickup = async (req, res, next) => {
 
     // Notify receiver that food is ready for pickup
     await notificationService.createNotification({
-      recipient: request.receiver,
+      recipient: request.receiver?._id || request.receiver,
       sender: donorId,
       type: 'READY_FOR_PICKUP',
       title: 'Ready for Pickup! 🍲',
-      message: `"${request.listing.title}" is packed and ready for your collection!`,
+      message: `"${request.listing.title}" is packed and ready for your collection! Enter the pickup code sent to your phone plus the donor's handover code to confirm.`,
       data: { listingId: request.listing._id, requestId: request._id, link: '/receiver/dashboard' },
     });
 
     return res.status(200).json({
       success: true,
-      message: 'Donation is marked Ready for Pickup! Receiver notified.',
+      message: pickupOtpSent
+        ? 'Donation is marked Ready for Pickup! The receiver has been sent a pickup code.'
+        : 'Donation is marked Ready for Pickup, but the pickup SMS could not be sent. Ask the receiver to tap "Resend code".',
       request,
+      pickupOtpSent,
+      pickupWarning,
+      ...(pickupDevOtp ? { devPickupOtp: pickupDevOtp } : {}),
+      ...(newDonationCode ? { donationCode: newDonationCode } : {}),
     });
   } catch (error) {
     next(error);
@@ -437,6 +526,8 @@ export const confirmCollection = async (req, res, next) => {
   try {
     const receiverId = req.user._id || req.user.id;
     const { id } = req.params;
+    const pickupOtp = String(req.body?.pickupOtp || '').trim();
+    const donationCode = String(req.body?.donationCode || '').trim();
 
     const request = await FoodRequest.findById(id).populate('listing');
     if (!request) {
@@ -457,35 +548,89 @@ export const confirmCollection = async (req, res, next) => {
       });
     }
 
-    const listing = await FoodListing.findById(request.listing._id);
+    if (!/^[0-9]{6}$/.test(pickupOtp) || !/^[0-9]{6}$/.test(donationCode)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Both the 6-digit pickup code (sent to your phone) and the donor\'s 6-digit handover code are required.',
+      });
+    }
+
+    const listing = await FoodListing.findById(request.listing._id).select('+donationCodeHash');
+
+    // ---- Step 1: donor's handover code (proves the donor released the food) ----
+    if (!listing || !listing.donationCodeHash) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'This listing has no handover code yet. Ask the donor to open their dashboard and tap "Show donation code".',
+      });
+    }
+
+    if ((request.donationCodeAttempts || 0) >= MAX_DONATION_CODE_ATTEMPTS) {
+      return res.status(429).json({
+        success: false,
+        message:
+          'Too many incorrect handover codes for this request. Ask the donor to generate a new code.',
+      });
+    }
+
+    if (donationCodeHash(donationCode) !== listing.donationCodeHash) {
+      request.donationCodeAttempts = (request.donationCodeAttempts || 0) + 1;
+      await request.save();
+      const remaining = MAX_DONATION_CODE_ATTEMPTS - request.donationCodeAttempts;
+      return res.status(400).json({
+        success: false,
+        message: `Incorrect donor handover code. ${remaining} ${
+          remaining === 1 ? 'attempt' : 'attempts'
+        } remaining.`,
+      });
+    }
+
+    // ---- Step 2: receiver's SMS pickup OTP (proves the receiver is present) ----
+    let pickupResult;
+    try {
+      pickupResult = await pickupOtpService.verify({
+        requestId: request._id,
+        receiverId,
+        otp: pickupOtp,
+      });
+    } catch (otpError) {
+      return res.status(400).json({ success: false, message: otpError.message });
+    }
+
+    // ---- Both factors verified: complete the donation ----
     const now = new Date();
 
     request.status = 'Completed';
     request.collectedAt = now;
     request.completedAt = now;
+    request.pickupOtpVerifiedAt = pickupResult.verifiedAt || now;
+    request.donationCodeVerifiedAt = now;
+    request.collectionVerifiedAt = now;
     await request.save();
 
+    listing.donationCodeVerifiedAt = now;
+
     // Release from reserved quantity
-    if (listing) {
-      listing.reservedQuantity = Math.max(0, listing.reservedQuantity - request.requestedQuantity);
-      if (listing.availableQuantity === 0 && listing.reservedQuantity === 0) {
-        listing.status = 'Completed';
-      }
-      await listing.save();
+    listing.reservedQuantity = Math.max(0, listing.reservedQuantity - request.requestedQuantity);
+    if (listing.availableQuantity === 0 && listing.reservedQuantity === 0) {
+      listing.status = 'Completed';
     }
+    await listing.save();
 
     // Create Impact Record
-    const weightInKg = normalizeWeightToKg(request.requestedQuantity, listing ? listing.quantityUnit : 'kg');
+    const weightInKg = normalizeWeightToKg(request.requestedQuantity, listing.quantityUnit);
 
     const impactRecord = new DonationRecord({
       listing: request.listing._id,
       request: request._id,
       donor: request.donor,
       receiver: receiverId,
-      foodTitle: listing ? listing.title : 'Food Donation',
-      category: listing ? listing.category : 'Cooked Meals',
+      foodTitle: listing.title || 'Food Donation',
+      category: listing.category || 'Cooked Meals',
       quantityRescued: request.requestedQuantity,
-      quantityUnit: listing ? listing.quantityUnit : 'kg',
+      quantityUnit: listing.quantityUnit,
       weightInKg,
       beneficiariesFed: request.beneficiaryCount || 1,
       completedAt: now,
@@ -496,10 +641,15 @@ export const confirmCollection = async (req, res, next) => {
     await ActivityLog.create({
       user: receiverId,
       action: 'COLLECTION_CONFIRMED',
-      details: `Collected ${request.requestedQuantity} ${listing?.quantityUnit} of "${listing?.title}". ${weightInKg} kg food rescued!`,
+      details: `Collected ${request.requestedQuantity} ${listing.quantityUnit} of "${listing.title}" with two-party verification. ${weightInKg} kg food rescued!`,
       targetType: 'FoodRequest',
       targetId: request._id,
-      metadata: { weightInKg, beneficiaries: request.beneficiaryCount },
+      metadata: {
+        weightInKg,
+        beneficiaries: request.beneficiaryCount,
+        pickupOtpVerified: true,
+        donationCodeVerified: true,
+      },
     });
 
     // Notify donor that collection is confirmed
@@ -508,18 +658,86 @@ export const confirmCollection = async (req, res, next) => {
       sender: receiverId,
       type: 'DONATION_COMPLETED',
       title: 'Donation Completed! 🎉',
-      message: `Your donation of "${listing?.title}" was collected by the receiver. Rescued ${weightInKg} kg!`,
+      message: `Your donation of "${listing.title}" was collected and verified with your handover code. Rescued ${weightInKg} kg!`,
       data: { listingId: request.listing?._id || request.listing, requestId: request._id, link: '/donor/dashboard' },
     });
 
     return res.status(200).json({
       success: true,
-      message: `Collection confirmed! Thank you for rescuing ${weightInKg} kg of surplus food!`,
+      message: `Collection verified by SMS code and donor handover code. Thank you for rescuing ${weightInKg} kg of surplus food!`,
       request,
       impact: impactRecord,
     });
   } catch (error) {
     next(error);
+  }
+};
+
+/**
+ * POST /api/requests/:id/collection-otp
+ * Receiver requests a fresh pickup SMS code (respects a 60s cooldown).
+ */
+export const resendCollectionOtp = async (req, res, next) => {
+  try {
+    const receiverId = req.user._id || req.user.id;
+    const { id } = req.params;
+
+    const request = await FoodRequest.findById(id).populate('listing');
+    if (!request) {
+      return res.status(404).json({ success: false, message: 'Request not found' });
+    }
+
+    if (request.receiver.toString() !== receiverId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the assigned receiver can request a pickup code.',
+      });
+    }
+
+    if (request.status !== 'Ready for Pickup') {
+      return res.status(400).json({
+        success: false,
+        message: 'Pickup codes are only available once the donor marks the food ready.',
+      });
+    }
+
+    const phone = req.user.phone;
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Add a phone number to your profile before requesting a pickup code.',
+      });
+    }
+
+    const issued = await pickupOtpService.issue({
+      requestId: request._id,
+      receiverId,
+      phone,
+      listingTitle: request.listing?.title || 'your food donation',
+    });
+
+    if (req.user.email) {
+      await emailService.sendCollectionOtpEmail({
+        to: req.user.email,
+        name: req.user.fullName || 'there',
+        listingTitle: request.listing?.title || 'your food donation',
+        code: issued.code,
+        expiresMinutes: 10,
+      }).catch(() => {});
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'A fresh pickup code has been sent to your phone and email.',
+      expiresAt: issued.expiresAt,
+      cooldownSeconds: issued.cooldownSeconds,
+      ...(issued.devOtp ? { devOtp: issued.devOtp } : {}),
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Could not send a pickup code.',
+    });
   }
 };
 

@@ -11,13 +11,16 @@ export const userService = {
   /**
    * Find a user by normalized lowercase email
    */
-  async findByEmail(email, { includePassword = false } = {}) {
+  async findByEmail(email, { includePassword = false, includeVerification = false } = {}) {
     const normalizedEmail = String(email || '').trim().toLowerCase();
     
     if (isDbConnected()) {
       const query = User.findOne({ email: normalizedEmail });
       if (includePassword) {
         query.select('+passwordHash');
+      }
+      if (includeVerification) {
+        query.select('+emailVerificationHash +emailVerificationExpires');
       }
       return query.exec();
     }
@@ -34,7 +37,14 @@ export const userService = {
         return bcrypt.compare(candidate, user.passwordHash);
       },
       toSafeObject: () => {
-        const { passwordHash, passwordResetTokenHash, passwordResetExpires, ...safe } = user;
+        const {
+          passwordHash,
+          passwordResetTokenHash,
+          passwordResetExpires,
+          emailVerificationHash,
+          emailVerificationExpires,
+          ...safe
+        } = user;
         return safe;
       },
       save: async function () {

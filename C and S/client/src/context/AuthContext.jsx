@@ -53,12 +53,26 @@ export function AuthProvider({ children }) {
     return data;
   };
 
-  // Register handler
+  // Register handler — account stays logged out until the email is verified
   const register = async (userData) => {
     const data = await authService.register(userData);
-    setUser(data.user);
+    if (data?.token) {
+      setUser(data.user);
+    }
     return data;
   };
+
+  // Email verification handler
+  const verifyEmail = async ({ email, code }) => {
+    const data = await authService.verifyEmail({ email, code });
+    if (data?.user) {
+      setUser(data.user);
+    }
+    return data;
+  };
+
+  // Resend verification code
+  const resendVerification = async (email) => authService.resendVerification(email);
 
   // Google OAuth handler
   const googleLogin = async (payload) => {
@@ -89,6 +103,8 @@ export function AuthProvider({ children }) {
     role: user?.role || null,
     login,
     register,
+    verifyEmail,
+    resendVerification,
     googleLogin,
     logout,
     refreshUser: fetchCurrentUser,

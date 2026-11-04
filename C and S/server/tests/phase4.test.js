@@ -211,6 +211,8 @@ const runPhase4Tests = async () => {
     });
     assert.strictEqual(verifyOtpRes.status, 201, `OTP verification failed: ${JSON.stringify(verifyOtpRes.data)}`);
     assert.strictEqual(verifyOtpRes.data.listing.status, 'Available');
+    assert.ok(verifyOtpRes.data.donationCode, 'A donation handover code should be returned on publish');
+    const donationCode = verifyOtpRes.data.donationCode;
     createdListingId = verifyOtpRes.data.listing._id;
     console.log(`  ✔ Food listing published with status "Available" (ID: ${createdListingId})`);
 
@@ -372,6 +374,8 @@ const runPhase4Tests = async () => {
     });
     assert.strictEqual(readyRes.status, 200, `Ready transition failed: ${JSON.stringify(readyRes.data)}`);
     assert.strictEqual(readyRes.data.request.status, 'Ready for Pickup');
+    assert.ok(readyRes.data.devPickupOtp, 'Dev mode should return the receiver pickup OTP');
+    const pickupOtp = readyRes.data.devPickupOtp;
     console.log('  ✔ Request transitioned to "Ready for Pickup"');
 
     // -----------------------------------------------------------------
@@ -386,10 +390,11 @@ const runPhase4Tests = async () => {
     assert.strictEqual(unauthorizedCollect.status, 403, 'Unauthorized user should be rejected with 403');
     console.log('  ✔ Unauthorized user rejected with 403 Forbidden');
 
-    // Designated receiver confirms collection
+    // Designated receiver confirms collection with BOTH verification factors
     const validCollect = await makeRequest(`/api/requests/${createdRequestId}/collect`, {
       method: 'PATCH',
       cookie: receiverCookie,
+      body: { pickupOtp, donationCode },
     });
     assert.strictEqual(validCollect.status, 200, `Collection failed: ${JSON.stringify(validCollect.data)}`);
     assert.strictEqual(validCollect.data.request.status, 'Completed');

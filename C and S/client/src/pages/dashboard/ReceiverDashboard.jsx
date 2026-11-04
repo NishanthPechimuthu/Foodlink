@@ -28,6 +28,7 @@ import Button from '../../components/common/Button';
 import { useAuth } from '../../context/AuthContext';
 import requestService from '../../services/request.service';
 import foodService from '../../services/food.service';
+import CollectionVerificationModal from '../../components/food/CollectionVerificationModal';
 
 export default function ReceiverDashboard() {
   const { user, logout } = useAuth();
@@ -37,6 +38,8 @@ export default function ReceiverDashboard() {
   const [availableCount, setAvailableCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('All');
+  const [collectionModalOpen, setCollectionModalOpen] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState(null);
 
   const fetchReceiverData = async () => {
     setLoading(true);
@@ -106,34 +109,10 @@ export default function ReceiverDashboard() {
   };
 
   // Actions
-  const handleConfirmCollection = async (requestId) => {
-    const confirm = await Swal.fire({
-      title: 'Confirm Food Collection',
-      text: 'Have you received and verified this surplus food donation from the donor?',
-      icon: 'question',
-      showCancelButton: true,
-      confirmButtonText: 'Yes, Food Received!',
-      confirmButtonColor: '#2E7D32',
-      cancelButtonText: 'Not Yet',
-    });
-
-    if (confirm.isConfirmed) {
-      try {
-        const result = await requestService.confirmCollection(requestId);
-        Swal.fire({
-          icon: 'success',
-          title: 'Donation Completed!',
-          text: result.message || 'Thank you for rescuing food for your community!',
-          confirmButtonColor: '#CC5500',
-        });
-        fetchReceiverData();
-      } catch (err) {
-        sileo.error({
-          title: 'Confirmation Failed',
-          description: err.response?.data?.message || 'Could not confirm collection.',
-        });
-      }
-    }
+  const handleConfirmCollection = (request) => {
+    if (!request) return;
+    setSelectedRequest(request);
+    setCollectionModalOpen(true);
   };
 
   const handleCancelRequest = async (requestId) => {
@@ -387,7 +366,7 @@ export default function ReceiverDashboard() {
                         <Button
                           variant="primary"
                           size="sm"
-                          onClick={() => handleConfirmCollection(req._id)}
+                          onClick={() => handleConfirmCollection(req)}
                           className="bg-purple-700 hover:bg-purple-800 text-white w-full sm:w-auto"
                           leftIcon={<PackageCheck className="w-4 h-4" />}
                         >
@@ -501,7 +480,7 @@ export default function ReceiverDashboard() {
                         <Button
                           variant="primary"
                           size="sm"
-                          onClick={() => handleConfirmCollection(req._id)}
+                          onClick={() => handleConfirmCollection(req)}
                           className="bg-purple-700 hover:bg-purple-800 text-white w-full md:w-auto shadow-sm"
                           leftIcon={<PackageCheck className="w-4 h-4" />}
                         >
@@ -589,7 +568,7 @@ export default function ReceiverDashboard() {
                       <Button
                         variant="primary"
                         size="md"
-                        onClick={() => handleConfirmCollection(item._id)}
+                        onClick={() => handleConfirmCollection(item)}
                         className="w-full justify-center bg-purple-700 hover:bg-purple-800 shadow-md text-sm"
                         leftIcon={<PackageCheck className="w-5 h-5" />}
                       >
@@ -678,6 +657,20 @@ export default function ReceiverDashboard() {
           </div>
         )}
       </Container>
+
+      <CollectionVerificationModal
+        isOpen={collectionModalOpen}
+        onClose={() => {
+          setCollectionModalOpen(false);
+          setSelectedRequest(null);
+        }}
+        request={selectedRequest}
+        onSuccess={() => {
+          setCollectionModalOpen(false);
+          setSelectedRequest(null);
+          fetchReceiverData();
+        }}
+      />
     </div>
   );
 }

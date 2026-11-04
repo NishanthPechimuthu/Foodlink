@@ -20,6 +20,7 @@ import Container from '../../components/common/Container';
 import Logo from '../../components/common/Logo';
 import Button from '../../components/common/Button';
 import GoogleAuthButton from '../../components/auth/GoogleAuthButton';
+import EmailVerificationModal from '../../components/auth/EmailVerificationModal';
 import { useAuth } from '../../context/AuthContext';
 
 export default function RegisterPage() {
@@ -42,6 +43,9 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
+  const [verificationOpen, setVerificationOpen] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState('');
+  const [verificationDevCode, setVerificationDevCode] = useState('');
 
   useEffect(() => {
     const roleParam = searchParams.get('role');
@@ -110,6 +114,20 @@ export default function RegisterPage() {
         organizationName: formData.organizationName.trim(),
         password: formData.password,
       });
+
+      // New accounts must confirm the 6-digit code emailed by Resend before
+      // they can sign in.
+      if (data.requiresEmailVerification) {
+        setVerificationEmail(data.email || formData.email.trim());
+        setVerificationDevCode(data.devCode || '');
+        setVerificationOpen(true);
+
+        sileo.success({
+          title: 'Check your email',
+          description: data.message || 'We sent you a 6-digit verification code.',
+        });
+        return;
+      }
 
       sileo.success({
         title: 'Account Created Successfully!',
@@ -425,6 +443,17 @@ export default function RegisterPage() {
           </div>
         </motion.div>
       </Container>
+
+      <EmailVerificationModal
+        isOpen={verificationOpen}
+        onClose={() => setVerificationOpen(false)}
+        email={verificationEmail}
+        initialDevCode={verificationDevCode}
+        onVerified={(user) => {
+          if (user?.role) navigate(getDashboardPath(user.role), { replace: true });
+          else navigate('/login', { replace: true });
+        }}
+      />
     </div>
   );
 }

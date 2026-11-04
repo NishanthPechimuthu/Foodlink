@@ -24,6 +24,15 @@ export const otpService = {
     const response = await api.post('/otp/resend', { verificationId });
     return response.data;
   },
+
+  /**
+   * Generate a fresh donor handover code for an existing listing.
+   * The previous code stops working immediately and the new one is emailed.
+   */
+  async regenerateDonationCode({ listingId }) {
+    const response = await api.post('/otp/donation-code/regenerate', { listingId });
+    return response.data;
+  },
 };
 
 export default otpService;

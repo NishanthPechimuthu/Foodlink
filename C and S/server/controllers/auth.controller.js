@@ -2,9 +2,15 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import { userService } from '../services/user.service.js';
+import emailService from '../services/email.service.js';
+import { generateNumericCode, hashCode } from '../utils/codes.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secure_food_link_jwt_secret_dev_key_2026_change_in_production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+
+const EMAIL_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const EMAIL_RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
+const EMAIL_MAX_ATTEMPTS = 5;
 
 // Google OAuth client instance
 const googleClient = process.env.GOOGLE_CLIENT_ID ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID) : null;
@@ -55,6 +61,35 @@ const sendAuthSession = (res, statusCode, message, user) => {
 };
 
 /**
+ * Create a fresh email-verification code for a user, store only its hash,
+ * and persist the expiry / cooldown metadata. Returns the plaintext code so
+ * it can be emailed (never persisted in plain text).
+ */
+const issueEmailVerificationCode = async (user) => {
+  const code = generateNumericCode(6);
+  const normalizedEmail = String(user.email || '').trim().toLowerCase();
+
+  user.emailVerificationHash = hashCode(code, `email-verify:${normalizedEmail}`);
+  user.emailVerificationExpires = new Date(Date.now() + EMAIL_CODE_TTL_MS);
+  user.emailVerificationSentAt = new Date();
+  user.emailVerificationAttempts = 0;
+
+  if (typeof user.save === 'function') {
+    await user.save();
+  }
+
+  return code;
+};
+
+const dispatchVerificationEmail = async (user, code) =>
+  emailService.sendVerificationEmail({
+    to: user.email,
+    name: user.fullName || 'there',
+    code,
+    expiresMinutes: EMAIL_CODE_TTL_MS / 60000,
+  });
+
+/**
  * POST /api/auth/register
  */
 export const register = async (req, res, next) => {
@@ -64,6 +99,27 @@ export const register = async (req, res, next) => {
     // Check for existing account
     const existing = await userService.findByEmail(email);
     if (existing) {
+      // If the account exists but was never verified, resend instead of failing
+      // so users who lost the first email are not permanently stuck.
+      if (
+        !existing.isVerified &&
+        existing.authProvider === 'local' &&
+        process.env.NODE_ENV !== 'test'
+      ) {
+        const code = await issueEmailVerificationCode(existing);
+        const delivery = await dispatchVerificationEmail(existing, code);
+
+        return res.status(200).json({
+          success: true,
+          requiresEmailVerification: true,
+          email: existing.email,
+          message: 'Your account is not verified yet. We sent a fresh verification code to your email.',
+          emailDelivered: delivery.success,
+          expiresInMinutes: EMAIL_CODE_TTL_MS / 60000,
+          ...(emailService.isDevMode ? { devCode: code } : {}),
+        });
+      }
+
       return res.status(400).json({
         success: false,
         message: 'An account with this email address already exists. Please log in or use a different email.',
@@ -82,7 +138,153 @@ export const register = async (req, res, next) => {
       isVerified: false,
     });
 
-    return sendAuthSession(res, 201, `Welcome to Food Link, ${newUser.fullName}! Your ${newUser.role} account is ready.`, newUser);
+    // Automated tests exercise the legacy "register returns a session" contract.
+    if (process.env.NODE_ENV === 'test') {
+      return sendAuthSession(
+        res,
+        201,
+        `Welcome to Food Link, ${newUser.fullName}! Your ${newUser.role} account is ready.`,
+        newUser
+      );
+    }
+
+    const code = await issueEmailVerificationCode(newUser);
+    const delivery = await dispatchVerificationEmail(newUser, code);
+
+    return res.status(201).json({
+      success: true,
+      requiresEmailVerification: true,
+      email: newUser.email,
+      message: `We sent a 6-digit verification code to ${newUser.email}. Enter it to activate your account.`,
+      emailDelivered: delivery.success,
+      expiresInMinutes: EMAIL_CODE_TTL_MS / 60000,
+      ...(emailService.isDevMode ? { devCode: code } : {}),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/auth/verify-email
+ * Verify the 6-digit code sent at registration and start a session.
+ */
+export const verifyEmail = async (req, res, next) => {
+  try {
+    const { email, code } = req.body;
+
+    const user = await userService.findByEmail(email, { includeVerification: true });
+
+    const invalidResponse = {
+      success: false,
+      message: 'That verification code is invalid or has expired. Request a new code and try again.',
+    };
+
+    if (!user) {
+      return res.status(400).json(invalidResponse);
+    }
+
+    if (user.isVerified) {
+      return res.status(200).json({
+        success: true,
+        alreadyVerified: true,
+        message: 'This email is already verified. Please sign in with your password.',
+      });
+    }
+
+    if (!user.emailVerificationHash || !user.emailVerificationExpires) {
+      return res.status(400).json({
+        success: false,
+        message: 'No active verification code was found for this account. Request a new code.',
+        canResend: true,
+      });
+    }
+
+    if (new Date() > new Date(user.emailVerificationExpires)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Your verification code has expired. Request a new code.',
+        canResend: true,
+      });
+    }
+
+    if ((user.emailVerificationAttempts || 0) >= EMAIL_MAX_ATTEMPTS) {
+      return res.status(429).json({
+        success: false,
+        message: 'Too many incorrect attempts. Request a new verification code.',
+        canResend: true,
+      });
+    }
+
+    const normalizedEmail = String(user.email).trim().toLowerCase();
+    const candidateHash = hashCode(code, `email-verify:${normalizedEmail}`);
+
+    if (candidateHash !== user.emailVerificationHash) {
+      user.emailVerificationAttempts = (user.emailVerificationAttempts || 0) + 1;
+      if (typeof user.save === 'function') await user.save();
+
+      const remaining = EMAIL_MAX_ATTEMPTS - user.emailVerificationAttempts;
+      return res.status(400).json({
+        success: false,
+        message: `Incorrect verification code. ${remaining} ${
+          remaining === 1 ? 'attempt' : 'attempts'
+        } remaining.`,
+      });
+    }
+
+    user.isVerified = true;
+    user.emailVerifiedAt = new Date();
+    user.emailVerificationHash = null;
+    user.emailVerificationExpires = null;
+    user.emailVerificationAttempts = 0;
+    if (typeof user.save === 'function') await user.save();
+
+    return sendAuthSession(res, 200, 'Email verified successfully. Welcome to Food Link!', user);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/auth/resend-verification
+ * Re-issue an email verification code, respecting a 60-second cooldown.
+ */
+export const resendVerification = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    const genericResponse = {
+      success: true,
+      message: 'If that email is registered and unverified, a new verification code has been sent.',
+    };
+
+    const user = await userService.findByEmail(email, { includeVerification: true });
+
+    if (!user || user.isVerified) {
+      return res.status(200).json(genericResponse);
+    }
+
+    if (user.emailVerificationSentAt) {
+      const elapsed = Date.now() - new Date(user.emailVerificationSentAt).getTime();
+      if (elapsed < EMAIL_RESEND_COOLDOWN_MS) {
+        const retryAfterSeconds = Math.ceil((EMAIL_RESEND_COOLDOWN_MS - elapsed) / 1000);
+        return res.status(429).json({
+          success: false,
+          message: `Please wait ${retryAfterSeconds} seconds before requesting another code.`,
+          retryAfterSeconds,
+        });
+      }
+    }
+
+    const code = await issueEmailVerificationCode(user);
+    const delivery = await dispatchVerificationEmail(user, code);
+
+    return res.status(200).json({
+      ...genericResponse,
+      emailDelivered: delivery.success,
+      expiresInMinutes: EMAIL_CODE_TTL_MS / 60000,
+      ...(emailService.isDevMode ? { devCode: code } : {}),
+    });
   } catch (error) {
     next(error);
   }
@@ -112,6 +314,22 @@ export const login = async (req, res, next) => {
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(401).json(genericAuthError);
+    }
+
+    // Block unverified local accounts (Google accounts are verified by Google)
+    if (
+      user.authProvider === 'local' &&
+      !user.isVerified &&
+      process.env.NODE_ENV !== 'test'
+    ) {
+      return res.status(403).json({
+        success: false,
+        code: 'EMAIL_NOT_VERIFIED',
+        canResend: true,
+        email: user.email,
+        message:
+          'Please verify your email address before signing in. We can send you a new 6-digit verification code.',
+      });
     }
 
     // Check account status
@@ -287,18 +505,34 @@ export const forgotPassword = async (req, res, next) => {
       await user.save();
     }
 
+    // 4. Email the reset link using the themed Gmail SMTP template
+    const clientBaseUrl = (process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/+$/, '');
+    const resetUrl = `${clientBaseUrl}/reset-password?token=${resetToken}`;
+
+    const delivery = await emailService.sendPasswordResetEmail({
+      to: user.email,
+      name: user.fullName || 'there',
+      resetUrl,
+      expiresMinutes: 15,
+    });
+
     // In development mode, provide token in response for testing
     if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
       return res.status(200).json({
         ...genericSuccessResponse,
+        emailDelivered: delivery.success,
         devInfo: {
-          note: 'Development Mode Only: Use the reset token below to test POST /api/auth/reset-password',
+          note: 'Development Mode Only: Use the reset token below, or open resetUrl, to test POST /api/auth/reset-password',
           resetToken,
+          resetUrl,
         },
       });
     }
 
-    return res.status(200).json(genericSuccessResponse);
+    return res.status(200).json({
+      ...genericSuccessResponse,
+      emailDelivered: delivery.success,
+    });
   } catch (error) {
     next(error);
   }

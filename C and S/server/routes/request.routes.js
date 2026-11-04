@@ -8,6 +8,7 @@ import {
   rejectRequest,
   markReadyForPickup,
   confirmCollection,
+  resendCollectionOtp,
   cancelFoodRequest,
 } from '../controllers/request.controller.js';
 import { protect, authorize } from '../middleware/auth.middleware.js';
@@ -20,6 +21,7 @@ router.use(protect);
 router.post('/', authorize('Receiver'), createFoodRequest);
 router.get('/my-requests', authorize('Receiver'), getMyRequests);
 router.patch('/:id/collect', authorize('Receiver'), confirmCollection);
+router.post('/:id/collection-otp', authorize('Receiver'), resendCollectionOtp);
 router.patch('/:id/cancel', authorize('Receiver'), cancelFoodRequest);
 
 // Donor specific routes

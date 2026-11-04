@@ -57,12 +57,32 @@ services:
       - key: CLOUDINARY_API_SECRET
         sync: false
 
-      - key: MSG91_AUTH_KEY
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_SECURE
+        value: "false"
+      - key: SMTP_USER
         sync: false
-      - key: MSG91_TEMPLATE_ID
+      - key: SMTP_PASS
         sync: false
-      - key: MSG91_SENDER_ID
-        value: FDLINK
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_DEV_MODE
+        value: "false"
+
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: TWILIO_MESSAGING_SERVICE_SID
+        sync: false
+      - key: SMS_DEV_MODE
+        value: "false"
+
       - key: OTP_EXPIRY_MINUTES
         value: "5"
       - key: OTP_RESEND_COOLDOWN_SECONDS

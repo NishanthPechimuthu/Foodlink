@@ -131,6 +131,20 @@ const foodListingSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Donor's handover code — stored hashed, revealed once at publish/regenerate
+    donationCodeHash: {
+      type: String,
+      select: false,
+      default: null,
+    },
+    donationCodeIssuedAt: {
+      type: Date,
+      default: null,
+    },
+    donationCodeVerifiedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

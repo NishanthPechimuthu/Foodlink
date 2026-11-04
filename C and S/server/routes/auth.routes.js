@@ -5,6 +5,8 @@ import {
   logout,
   getMe,
   googleAuth,
+  verifyEmail,
+  resendVerification,
   forgotPassword,
   resetPassword,
 } from '../controllers/auth.controller.js';
@@ -12,6 +14,8 @@ import { protect, authorize } from '../middleware/auth.middleware.js';
 import {
   validateRegister,
   validateLogin,
+  validateVerifyEmail,
+  validateResendVerification,
   validateForgotPassword,
   validateResetPassword,
   validateGoogleAuth,
@@ -25,6 +29,8 @@ router.post('/register', authLimiter, validateRegister, register);
 router.post('/login', authLimiter, validateLogin, login);
 router.post('/logout', logout);
 router.post('/google', authLimiter, validateGoogleAuth, googleAuth);
+router.post('/verify-email', authLimiter, validateVerifyEmail, verifyEmail);
+router.post('/resend-verification', authLimiter, validateResendVerification, resendVerification);
 router.post('/forgot-password', passwordResetLimiter, validateForgotPassword, forgotPassword);
 router.post('/reset-password', validateResetPassword, resetPassword);
 

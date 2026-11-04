@@ -24,6 +24,7 @@ import {
   ArrowRight,
   Utensils,
   Download,
+  KeyRound,
 } from "lucide-react";
 import { sileo } from "sileo";
 import Swal from "sweetalert2";
@@ -32,6 +33,7 @@ import Button from "../../components/common/Button";
 import { useAuth } from "../../context/AuthContext";
 import foodService from "../../services/food.service";
 import requestService from "../../services/request.service";
+import otpService from "../../services/otp.service";
 import AddFoodModal from "../../components/food/AddFoodModal";
 import FoodLoader from "../../components/animations/FoodLoader";
 
@@ -183,12 +185,43 @@ export default function DonorDashboard() {
 
   const handleMarkReady = async (requestId) => {
     try {
-      await requestService.markReadyForPickup(requestId);
-      sileo.success({
-        title: "Ready for Pickup!",
-        description:
-          "Receiver has been notified that the food is packaged and ready.",
-      });
+      const result = await requestService.markReadyForPickup(requestId);
+
+      if (result.donationCode) {
+        // Legacy listing: a handover code was generated just now
+        await Swal.fire({
+          icon: "success",
+          title: "Handover Code Generated",
+          html: `
+            <p style="font-size:13px;color:#6D4C41;margin-bottom:12px">
+              Share this only with the receiver at handover. It has also been emailed to you.
+            </p>
+            <div style="font-family:monospace;font-size:32px;letter-spacing:9px;font-weight:700;
+                        color:#4E342E;background:#E8F5E9;border:2px dashed #2E7D32;
+                        border-radius:14px;padding:16px">
+              ${result.donationCode}
+            </div>
+          `,
+          confirmButtonText: "Got it",
+          confirmButtonColor: "#CC5500",
+        });
+      }
+
+      if (result.pickupOtpSent === false) {
+        sileo.warning({
+          title: "Marked Ready — SMS Pending",
+          description:
+            result.pickupWarning ||
+            "The pickup SMS could not be sent. Ask the receiver to tap Resend code.",
+        });
+      } else {
+        sileo.success({
+          title: "Ready for Pickup!",
+          description:
+            "The receiver has been sent a pickup code for the two-party collection check.",
+        });
+      }
+
       fetchDashboardData();
     } catch (err) {
       sileo.error({
@@ -224,6 +257,71 @@ export default function DonorDashboard() {
             err.response?.data?.message || "Could not cancel listing.",
         });
       }
+    }
+  };
+
+  // Show (or regenerate) the handover code the receiver needs at collection
+  const escapeHtml = (value = "") =>
+    String(value).replace(/[&<>"']/g, (char) => {
+      switch (char) {
+        case "&":
+          return "&amp;";
+        case "<":
+          return "&lt;";
+        case ">":
+          return "&gt;";
+        case '"':
+          return "&quot;";
+        case "'":
+          return "&#39;";
+        default:
+          return char;
+      }
+    });
+
+  const handleShowDonationCode = async (item) => {
+    const confirm = await Swal.fire({
+      title: "Show donation handover code?",
+      text:
+        "For security this generates a fresh code and emails it to you. The previous code stops working immediately.",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "Generate & Show",
+      confirmButtonColor: "#2E7D32",
+      cancelButtonText: "Cancel",
+    });
+
+    if (!confirm.isConfirmed) return;
+
+    try {
+      const result = await otpService.regenerateDonationCode({ listingId: item._id });
+
+      await Swal.fire({
+        icon: "success",
+        title: "Donation Handover Code",
+        html: `
+          <p style="font-size:13px;color:#6D4C41;margin-bottom:12px">
+            For <strong>${escapeHtml(item.title)}</strong>. Share this only with the receiver, in person,
+            when you hand over the food.
+          </p>
+          <div style="font-family:monospace;font-size:34px;letter-spacing:10px;font-weight:700;
+                      color:#4E342E;background:#E8F5E9;border:2px dashed #2E7D32;
+                      border-radius:14px;padding:16px">
+            ${result.donationCode}
+          </div>
+          <p style="font-size:11px;color:#8D6E63;margin-top:12px">
+            ${result.donationCodeEmailSent ? "A copy has also been emailed to you." : "Copy this code now — it is only shown once."}
+          </p>
+        `,
+        confirmButtonText: "Done",
+        confirmButtonColor: "#CC5500",
+      });
+    } catch (err) {
+      sileo.error({
+        title: "Could Not Generate Code",
+        description:
+          err.response?.data?.message || "Please try again in a moment.",
+      });
     }
   };
 
@@ -651,20 +749,33 @@ export default function DonorDashboard() {
                       </div>
                     </div>
 
-                    <div className="mt-5 pt-3 border-t border-chocolate/10 flex items-center justify-between">
+                    <div className="mt-5 pt-3 border-t border-chocolate/10 flex items-center justify-between gap-2">
                       <span className="text-[11px] text-chocolate/60">
                         {new Date(item.createdAt).toLocaleDateString()}
                       </span>
 
-                      {item.status === "Available" && (
-                        <button
-                          type="button"
-                          onClick={() => handleCancelListing(item._id)}
-                          className="text-xs font-bold text-softRed hover:underline flex items-center gap-1 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" /> Cancel Listing
-                        </button>
-                      )}
+                      <div className="flex items-center gap-3">
+                        {!["Completed", "Expired", "Cancelled"].includes(item.status) && (
+                          <button
+                            type="button"
+                            onClick={() => handleShowDonationCode(item)}
+                            className="text-xs font-bold text-mutedGreen hover:underline flex items-center gap-1 cursor-pointer"
+                            title="Generate the code the receiver must enter at handover"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" /> Show donation code
+                          </button>
+                        )}
+
+                        {item.status === "Available" && (
+                          <button
+                            type="button"
+                            onClick={() => handleCancelListing(item._id)}
+                            className="text-xs font-bold text-softRed hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Cancel Listing
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}

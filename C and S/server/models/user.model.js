@@ -99,6 +99,28 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    emailVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    emailVerificationHash: {
+      type: String,
+      select: false,
+      default: null,
+    },
+    emailVerificationExpires: {
+      type: Date,
+      select: false,
+      default: null,
+    },
+    emailVerificationSentAt: {
+      type: Date,
+      default: null,
+    },
+    emailVerificationAttempts: {
+      type: Number,
+      default: 0,
+    },
     accountStatus: {
       type: String,
       enum: ['active', 'suspended', 'pending'],
@@ -122,6 +144,8 @@ const userSchema = new mongoose.Schema(
         delete ret.passwordHash;
         delete ret.passwordResetTokenHash;
         delete ret.passwordResetExpires;
+        delete ret.emailVerificationHash;
+        delete ret.emailVerificationExpires;
         delete ret.__v;
         return ret;
       },
@@ -131,6 +155,8 @@ const userSchema = new mongoose.Schema(
         delete ret.passwordHash;
         delete ret.passwordResetTokenHash;
         delete ret.passwordResetExpires;
+        delete ret.emailVerificationHash;
+        delete ret.emailVerificationExpires;
         delete ret.__v;
         return ret;
       },
@@ -153,6 +179,8 @@ userSchema.methods.toSafeObject = function () {
   delete obj.passwordHash;
   delete obj.passwordResetTokenHash;
   delete obj.passwordResetExpires;
+  delete obj.emailVerificationHash;
+  delete obj.emailVerificationExpires;
   delete obj.__v;
   return obj;
 };

@@ -8,6 +8,7 @@ import ImpactPage from '../pages/public/ImpactPage';
 import HowItWorksPage from '../pages/public/HowItWorksPage';
 import LoginPage from '../pages/auth/LoginPage';
 import RegisterPage from '../pages/auth/RegisterPage';
+import ResetPasswordPage from '../pages/auth/ResetPasswordPage';
 import NotFoundPage from '../pages/public/NotFoundPage';
 import ProtectedRoute from '../components/auth/ProtectedRoute';
 import DonorDashboard from '../pages/dashboard/DonorDashboard';
@@ -26,6 +27,7 @@ export default function AppRoutes() {
         <Route path="how-it-works" element={<HowItWorksPage />} />
         <Route path="login" element={<LoginPage />} />
         <Route path="register" element={<RegisterPage />} />
+        <Route path="reset-password" element={<ResetPasswordPage />} />
 
         {/* Protected Role-Based Dashboard Routes */}
         <Route

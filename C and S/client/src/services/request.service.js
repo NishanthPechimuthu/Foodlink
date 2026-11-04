@@ -58,10 +58,20 @@ export const requestService = {
   },
 
   /**
-   * Receiver confirms collection -> marks Completed and registers impact
+   * Receiver confirms collection with two-party verification:
+   *   - pickupOtp   : SMS code sent to the receiver
+   *   - donationCode: handover code given by the donor
    */
-  async confirmCollection(id) {
-    const response = await api.patch(`/requests/${id}/collect`);
+  async confirmCollection(id, payload = {}) {
+    const response = await api.patch(`/requests/${id}/collect`, payload);
+    return response.data;
+  },
+
+  /**
+   * Receiver requests a fresh pickup SMS code
+   */
+  async sendCollectionOtp(id) {
+    const response = await api.post(`/requests/${id}/collection-otp`);
     return response.data;
   },
 

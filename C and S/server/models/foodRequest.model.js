@@ -77,6 +77,23 @@ const foodRequestSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Two-party collection verification audit trail
+    pickupOtpVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    donationCodeVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    donationCodeAttempts: {
+      type: Number,
+      default: 0,
+    },
+    collectionVerifiedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

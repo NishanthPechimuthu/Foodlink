@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShieldCheck, Clock, RefreshCw, X, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, Clock, RefreshCw, X, AlertCircle, CheckCircle2, Copy, KeyRound } from 'lucide-react';
 import { sileo } from 'sileo';
 import Button from '../common/Button';
 import otpService from '../../services/otp.service';
@@ -19,6 +19,9 @@ export default function OTPVerificationModal({
   const [errorMsg, setErrorMsg] = useState('');
   const [currentVerificationId, setCurrentVerificationId] = useState(null);
   const [devOtp, setDevOtp] = useState('');
+  const [issuedCode, setIssuedCode] = useState('');
+  const [issuedListing, setIssuedListing] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   const inputRefs = useRef([]);
 
@@ -30,6 +33,9 @@ export default function OTPVerificationModal({
       setResendCooldown(60);
       setOtp(['', '', '', '', '', '']);
       setErrorMsg('');
+      setIssuedCode('');
+      setIssuedListing(null);
+      setCopied(false);
       setTimeout(() => inputRefs.current[0]?.focus(), 150);
     }
   }, [verificationData]);
@@ -117,6 +123,20 @@ export default function OTPVerificationModal({
         otp: otpCode,
       });
 
+      // The API returns a one-time handover code. Show it before closing so the
+      // donor can save it — it is also emailed to them.
+      if (result.donationCode) {
+        setIssuedCode(result.donationCode);
+        setIssuedListing(result.listing);
+        setTimeLeft(0);
+        setDevOtp('');
+        sileo.success({
+          title: 'Food Listing Published!',
+          description: 'Save your handover code — the receiver needs it at collection.',
+        });
+        return;
+      }
+
       sileo.success({
         title: 'Food Listing Published!',
         description: 'Your food listing is verified and live on the Explore page.',
@@ -131,6 +151,24 @@ export default function OTPVerificationModal({
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCopyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(issuedCode);
+      setCopied(true);
+      sileo.info({ title: 'Code copied', description: 'Paste it somewhere safe.' });
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      sileo.error({ title: 'Copy failed', description: 'Please note the code down manually.' });
+    }
+  };
+
+  const handleDone = () => {
+    if (onVerificationSuccess) {
+      onVerificationSuccess(issuedListing, issuedCode);
+    }
+    onClose();
   };
 
   const handleResend = async () => {
@@ -171,6 +209,68 @@ export default function OTPVerificationModal({
   };
 
   if (!isOpen) return null;
+
+  // Success step — show the one-time donation handover code before closing
+  if (issuedCode) {
+    return (
+      <AnimatePresence>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-chocolate/60 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 15 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 15 }}
+            className="w-full max-w-md bg-white rounded-3xl p-6 sm:p-8 shadow-2xl border border-chocolate/10 relative"
+          >
+            <div className="text-center mb-6">
+              <div className="w-14 h-14 rounded-2xl bg-mutedGreen-light text-mutedGreen mx-auto flex items-center justify-center mb-3 shadow-inner">
+                <CheckCircle2 className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-extrabold font-heading text-chocolate tracking-tight">
+                Listing published 🎉
+              </h2>
+              <p className="mt-1 text-xs sm:text-sm text-chocolate/70 max-w-xs mx-auto">
+                Your SMS verification succeeded and the food is live on the Explore page.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border-2 border-dashed border-mutedGreen/40 bg-mutedGreen-light p-5 text-center mb-4">
+              <div className="flex items-center justify-center gap-2 text-[11px] font-extrabold uppercase tracking-widest text-mutedGreen-dark mb-2">
+                <KeyRound className="w-4 h-4" />
+                Donation handover code
+              </div>
+              <p className="font-mono text-4xl font-extrabold tracking-[0.4em] text-chocolate">
+                {issuedCode}
+              </p>
+              <button
+                type="button"
+                onClick={handleCopyCode}
+                className="mt-3 inline-flex items-center gap-1.5 text-xs font-bold text-burntOrange hover:underline cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                {copied ? 'Copied!' : 'Copy code'}
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs mb-5">
+              <strong>Keep this code safe.</strong> Share it with the receiver only when you physically
+              hand over the food. A copy has also been emailed to you.
+            </div>
+
+            <Button
+              type="button"
+              variant="primary"
+              size="lg"
+              onClick={handleDone}
+              className="w-full justify-center shadow-clay-btn text-base"
+              leftIcon={<CheckCircle2 className="w-5 h-5" />}
+            >
+              I've saved the code
+            </Button>
+          </motion.div>
+        </div>
+      </AnimatePresence>
+    );
+  }
 
   return (
     <AnimatePresence>

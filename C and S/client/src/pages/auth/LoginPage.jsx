@@ -8,6 +8,7 @@ import Container from '../../components/common/Container';
 import Logo from '../../components/common/Logo';
 import Button from '../../components/common/Button';
 import GoogleAuthButton from '../../components/auth/GoogleAuthButton';
+import EmailVerificationModal from '../../components/auth/EmailVerificationModal';
 import { useAuth } from '../../context/AuthContext';
 import authService from '../../services/auth.service';
 
@@ -24,6 +25,8 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState({});
+  const [verificationOpen, setVerificationOpen] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState('');
 
   const validate = () => {
     const newErrors = {};
@@ -69,6 +72,17 @@ export default function LoginPage() {
       const targetDashboard = getDashboardPath(data.user.role);
       navigate(fromPath || targetDashboard, { replace: true });
     } catch (err) {
+      // Account exists but the email has not been verified yet
+      if (err.response?.status === 403 && err.response?.data?.code === 'EMAIL_NOT_VERIFIED') {
+        setVerificationEmail(err.response.data.email || formData.email);
+        setVerificationOpen(true);
+        sileo.warning({
+          title: 'Email Not Verified',
+          description: 'Enter the new 6-digit code we just sent to your inbox.',
+        });
+        return;
+      }
+
       const errorMessage =
         err.response?.data?.message || 'Login failed. Please verify your credentials and try again.';
       sileo.error({
@@ -101,10 +115,14 @@ export default function LoginPage() {
     if (email) {
       try {
         const res = await authService.forgotPassword(email);
+        const devResetUrl = res.devInfo?.resetUrl;
+
         Swal.fire({
           icon: 'success',
-          title: 'Instructions Sent',
-          text: res.message || 'If an account matches that email, reset instructions have been dispatched.',
+          title: 'Check your inbox',
+          html: devResetUrl
+            ? `<p style="font-size:14px">A themed reset email was generated. In development you can also <a href="${devResetUrl}" style="color:#CC5500;font-weight:700">open the reset link</a>.</p>`
+            : `<p style="font-size:14px">${res.message || 'If an account matches that email, a password reset link is on its way.'}</p>`,
           confirmButtonColor: '#CC5500',
         });
       } catch (err) {
@@ -273,6 +291,17 @@ export default function LoginPage() {
           </div>
         </motion.div>
       </Container>
+
+      <EmailVerificationModal
+        isOpen={verificationOpen}
+        onClose={() => setVerificationOpen(false)}
+        email={verificationEmail}
+        autoResend
+        onVerified={(user) => {
+          const fromPath = location.state?.from?.pathname;
+          navigate(fromPath || getDashboardPath(user?.role), { replace: true });
+        }}
+      />
     </div>
   );
 }

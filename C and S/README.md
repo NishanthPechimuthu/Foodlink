@@ -8,7 +8,7 @@
 
 - **Frontend:** React 19, Vite 6, Tailwind CSS 3, Motion for React 12, Lucide React, Sileo, SweetAlert2, Leaflet & OpenStreetMap, Axios, React Router 7.
 - **Backend:** Node.js, Express.js, MongoDB Atlas with Mongoose, JWT (HTTP-only cookies), bcryptjs, Google OAuth.
-- **External Services:** MSG91 SMS OTP (with provider-independent architecture & dev mode), Cloudinary image storage, Leaflet OpenStreetMap.
+- **External Services:** Twilio SMS OTP, Gmail SMTP transactional email (verification, password reset, donation handover codes), Cloudinary image storage, Leaflet OpenStreetMap.
 - **Design System:** 85% Solid Modern UI + 15% Subtle Claymorphism.
   - Primary Background: Cream (`#F8F4E7`)
   - Secondary: Chocolate Brown (`#4E342E`)
@@ -67,7 +67,7 @@ food-link/
 │   ├── middleware/             # Role guards, JWT verification, Rate-limiting
 │   ├── models/                 # Mongoose schemas (User, FoodListing, Request, Impact, OTP)
 │   ├── routes/                 # REST endpoints (/api/health, /api/auth, /api/food, etc.)
-│   ├── services/               # MSG91 OTP service, Cloudinary service, Notification service
+│   ├── services/               # Twilio SMS + OTP services, Gmail SMTP email service, Cloudinary, Notification service
 │   ├── app.js                  # Express application setup
 │   ├── server.js               # Server entry point & DB connection
 │   └── package.json
@@ -111,7 +111,7 @@ npm run build
 - [x] **Phase 1: Project Foundation** (Folder structure, dependencies, Express, Vite, Tailwind, DB config, health check)
 - [x] **Phase 2: Complete Design System & Frontend** (85% solid + 15% clay UI, Navbar, Footer, Signature Handover Hero Animation, FoodLoader, Landing Page, Explore, About, How It Works, Login & Register UIs)
 - [ ] **Phase 3: Database and Authentication** (User models, JWT in HTTP-only cookies, Google OAuth, Role-based route guards)
-- [ ] **Phase 4: Donor and OTP System** (Donor dashboard, listing forms, Cloudinary image upload, MSG91 OTP publication verification)
+- [ ] **Phase 4: Donor and OTP System** (Donor dashboard, listing forms, Cloudinary image upload, Twilio SMS OTP publication verification, unique donation handover codes)
 - [ ] **Phase 5: Receiver Module** (Explore food, filters, detail modals, Leaflet map, request flow)
 - [ ] **Phase 6: Request Management** (Approval/rejection, atomic quantity updates, ready for collection, completion confirmation)
 - [ ] **Phase 7: Admin Module** (Admin dashboard, user management, listing moderation, audit logs, analytics)

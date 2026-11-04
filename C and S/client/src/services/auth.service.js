@@ -13,6 +13,26 @@ export const authService = {
   },
 
   /**
+   * Verify the 6-digit email code sent at registration.
+   * On success the API returns a session token.
+   */
+  async verifyEmail({ email, code }) {
+    const response = await api.post('/auth/verify-email', { email, code });
+    if (response.data?.token) {
+      sessionStorage.setItem('food_link_session_token', response.data.token);
+    }
+    return response.data;
+  },
+
+  /**
+   * Request a fresh email verification code.
+   */
+  async resendVerification(email) {
+    const response = await api.post('/auth/resend-verification', { email });
+    return response.data;
+  },
+
+  /**
    * Login with email and password
    */
   async login(credentials) {

@@ -1,67 +1,57 @@
-import crypto from 'crypto';
-import axios from 'axios';
 import OTPVerification from '../models/otpVerification.model.js';
+import smsService from './sms.service.js';
+import { generateNumericCode, hashCode } from '../utils/codes.js';
+
+const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
+const MAX_ATTEMPTS = 5;
+
+const isDevMode = () =>
+  process.env.OTP_DEV_MODE === 'true' || smsService.isDevMode;
 
 export const otpService = {
   /**
    * Generate a 6-digit numerical OTP
    */
   generateOtp() {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    return generateNumericCode(6);
   },
 
   /**
    * Hash OTP using SHA-256
    */
-  hashOtp(otp) {
-    return crypto.createHash('sha256').update(String(otp)).digest('hex');
+  hashOtp(otp, scope = 'publish-food') {
+    return hashCode(otp, scope);
   },
 
   /**
-   * Send SMS via MSG91 (if credentials configured) or dev mode
+   * Send SMS via Twilio (falls back to console in dev / when unconfigured)
    */
-  async sendSmsOtp(phone, otp) {
-    const isDevMode =
-      process.env.OTP_DEV_MODE === 'true' ||
-      !process.env.MSG91_AUTH_KEY ||
-      process.env.NODE_ENV !== 'production';
+  async sendSmsOtp(phone, otp, purpose = 'verification') {
+    const message =
+      purpose === 'pickup'
+        ? `Food Link: your pickup confirmation code is ${otp}. It expires in 5 minutes. Never share it before receiving the food.`
+        : `Food Link: your food listing verification code is ${otp}. It expires in 5 minutes. Do not share this code.`;
 
-    if (isDevMode) {
-      console.log(`[OTP Service] Dev Mode active. SMS OTP for ${phone}: [SECURE DISPATCH READY]`);
-      return { success: true, mode: 'development', devOtp: otp };
-    }
+    const result = await smsService.sendSms(phone, message);
 
-    try {
-      // MSG91 Send OTP API endpoint
-      const response = await axios.post(
-        'https://control.msg91.com/api/v5/otp',
-        {
-          template_id: process.env.MSG91_TEMPLATE_ID,
-          mobile: phone.replace(/[^0-9]/g, ''),
-          otp: otp,
-          sender: process.env.MSG91_SENDER_ID || 'FDLINK',
-        },
-        {
-          headers: {
-            authkey: process.env.MSG91_AUTH_KEY,
-            'Content-Type': 'application/json',
-          },
-          timeout: 6000,
-        }
+    if (!result.success) {
+      throw new Error(
+        'We could not send the SMS verification code. Please check the phone number and try again.'
       );
-      return { success: true, mode: 'sms', providerResponse: response.data };
-    } catch (err) {
-      console.warn('[OTP Service] SMS provider dispatch error:', err.message);
-      // Fallback in case of SMS gateway temporary failure
-      return { success: true, mode: 'fallback', devOtp: otp };
     }
+
+    return {
+      success: true,
+      mode: result.mode,
+      devOtp: isDevMode() ? otp : undefined,
+    };
   },
 
   /**
-   * Create or update pending OTP verification record
+   * Create or update pending OTP verification record for publishing a listing
    */
   async createVerification({ donorId, phone, listingDraft }) {
-    // Check if an unexpired OTP with active cooldown exists
     const existing = await OTPVerification.findOne({
       donor: donorId,
       action: 'PUBLISH_FOOD',
@@ -75,10 +65,10 @@ export const otpService = {
     }
 
     const rawOtp = this.generateOtp();
-    const hashedOtp = this.hashOtp(rawOtp);
+    const hashedOtp = this.hashOtp(rawOtp, 'publish-food');
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + 5 * 60 * 1000); // 5 minutes
-    const resendCooldownUntil = new Date(now.getTime() + 60 * 1000); // 60 seconds
+    const expiresAt = new Date(now.getTime() + OTP_TTL_MS);
+    const resendCooldownUntil = new Date(now.getTime() + RESEND_COOLDOWN_MS);
 
     // Clean up any older pending verifications for this donor
     await OTPVerification.deleteMany({ donor: donorId, isVerified: false });
@@ -97,14 +87,20 @@ export const otpService = {
 
     await verificationRecord.save();
 
-    // Dispatch SMS
-    const dispatchResult = await this.sendSmsOtp(phone, rawOtp);
+    // Dispatch SMS (throws with a user-friendly message when delivery fails)
+    let dispatchResult;
+    try {
+      dispatchResult = await this.sendSmsOtp(phone, rawOtp, 'listing');
+    } catch (dispatchError) {
+      await OTPVerification.deleteOne({ _id: verificationRecord._id });
+      throw dispatchError;
+    }
 
     return {
       verificationId: verificationRecord._id,
       expiresAt,
       cooldownSeconds: 60,
-      devOtp: dispatchResult.devOtp, // Excluded in production without dev mode
+      devOtp: dispatchResult.devOtp,
     };
   },
 
@@ -126,19 +122,20 @@ export const otpService = {
       throw new Error('OTP has expired. Please request a new OTP.');
     }
 
-    if (record.attempts >= 5) {
+    if (record.attempts >= MAX_ATTEMPTS) {
       throw new Error('Maximum verification attempts exceeded. Please request a new OTP.');
     }
 
-    const candidateHash = this.hashOtp(otp);
+    const candidateHash = this.hashOtp(otp, 'publish-food');
     if (candidateHash !== record.hashedOtp) {
       record.attempts += 1;
       await record.save();
-      const remaining = 5 - record.attempts;
-      throw new Error(`Invalid OTP. You have ${remaining} ${remaining === 1 ? 'attempt' : 'attempts'} remaining.`);
+      const remaining = MAX_ATTEMPTS - record.attempts;
+      throw new Error(
+        `Invalid OTP. You have ${remaining} ${remaining === 1 ? 'attempt' : 'attempts'} remaining.`
+      );
     }
 
-    // Success: mark verified
     record.isVerified = true;
     record.verifiedAt = new Date();
     await record.save();
@@ -169,14 +166,14 @@ export const otpService = {
     }
 
     const rawOtp = this.generateOtp();
-    record.hashedOtp = this.hashOtp(rawOtp);
+    record.hashedOtp = this.hashOtp(rawOtp, 'publish-food');
     const now = new Date();
-    record.expiresAt = new Date(now.getTime() + 5 * 60 * 1000);
-    record.resendCooldownUntil = new Date(now.getTime() + 60 * 1000);
-    record.attempts = 0; // reset attempts for fresh OTP
+    record.expiresAt = new Date(now.getTime() + OTP_TTL_MS);
+    record.resendCooldownUntil = new Date(now.getTime() + RESEND_COOLDOWN_MS);
+    record.attempts = 0;
     await record.save();
 
-    const dispatchResult = await this.sendSmsOtp(record.phone, rawOtp);
+    const dispatchResult = await this.sendSmsOtp(record.phone, rawOtp, 'listing');
 
     return {
       success: true,

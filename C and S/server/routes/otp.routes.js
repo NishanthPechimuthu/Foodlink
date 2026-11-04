@@ -3,6 +3,7 @@ import {
   sendListingOtp,
   verifyListingOtp,
   resendListingOtp,
+  regenerateDonationCode,
 } from '../controllers/otp.controller.js';
 import { protect, authorize } from '../middleware/auth.middleware.js';
 
@@ -15,5 +16,6 @@ router.use(authorize('Donor'));
 router.post('/send', sendListingOtp);
 router.post('/verify', verifyListingOtp);
 router.post('/resend', resendListingOtp);
+router.post('/donation-code/regenerate', regenerateDonationCode);
 
 export default router;

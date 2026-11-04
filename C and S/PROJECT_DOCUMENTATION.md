@@ -41,7 +41,7 @@
 | **Backend** | Node.js + Express 4 + Mongoose 8 |
 | **Database** | MongoDB Atlas |
 | **Authentication** | JWT (HttpOnly cookie + Bearer fallback), bcrypt, Google OAuth |
-| **External services** | Cloudinary (images), MSG91 (SMS OTP), Google Identity Services, Leaflet/OpenStreetMap |
+| **External services** | Cloudinary (images), Twilio (SMS OTP), Gmail SMTP (transactional email), Google Identity Services, Leaflet/OpenStreetMap |
 | **Repository layout** | Monorepo: `client/` and `server/` under the `C and S` folder |
 
 ### Problems it solves
@@ -175,7 +175,8 @@ Fonts loaded in `client/index.html`:
 | `multer` | 1.4.5-lts.1 | In-memory multipart uploads |
 | `cloudinary` | 2.5 | Image storage |
 | `google-auth-library` | 9.15 | Google ID token verification |
-| `axios` | 1.7 | MSG91 HTTP calls |
+| `twilio` | 6.x | SMS OTP delivery |
+| `nodemailer` | 10.x | Gmail SMTP email (verification, reset, handover codes) |
 | `dotenv` | 16.4 | Environment variables |
 | `nodemon` | 3.1 (dev) | Auto-restart in development |
 
@@ -185,7 +186,8 @@ Fonts loaded in `client/index.html`:
 | --- | --- | --- |
 | MongoDB Atlas | All persistent data | In-memory user store only (not durable); other routes return 503 |
 | Cloudinary | Listing images | Base64 data URI stored in MongoDB |
-| MSG91 | SMS OTP | OTP returned to client in development/dev mode |
+| Twilio | SMS OTP | OTP returned to client in development/dev mode |
+| Gmail SMTP | Email verification, password reset, handover codes | Code/link logged to server console in dev mode |
 | Google Identity Services | Google sign-in | Simulated dev token flow in the UI |
 | OpenStreetMap tiles | Maps | No fallback (map requires network) |
 
@@ -208,7 +210,8 @@ flowchart LR
     subgraph Data & Services
         DB[(MongoDB Atlas)]
         CL[Cloudinary]
-        SMS[MSG91]
+        SMS[Twilio SMS]
+        MAIL[Gmail SMTP]
         GOOG[Google Identity]
         OSM[OpenStreetMap tiles]
     end
@@ -593,7 +596,7 @@ sequenceDiagram
     participant D as Donor UI
     participant API as Express API
     participant DB as MongoDB
-    participant SMS as MSG91
+    participant SMS as Twilio SMS
 
     D->>API: POST /api/otp/send { phone, listingData }
     API->>API: Validate fields + dates
@@ -1015,7 +1018,7 @@ Supporting animation components: `DonorHand`, `ReceiverHand`, `DonationBasket`, 
 - Node.js 18+ (Node 22 recommended)
 - npm
 - MongoDB (local or Atlas) for database-backed features
-- Optional: Cloudinary, MSG91, Google OAuth credentials
+- Optional: Cloudinary, Twilio, a Gmail account with an App Password, Google OAuth credentials
 
 ### 12.2 Install
 
@@ -1060,9 +1063,16 @@ GOOGLE_CLIENT_SECRET=your_google_client_secret
 CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
 CLOUDINARY_API_KEY=your_cloudinary_api_key
 CLOUDINARY_API_SECRET=your_cloudinary_api_secret
-MSG91_AUTH_KEY=
-MSG91_TEMPLATE_ID=
-MSG91_SENDER_ID=FDLINK
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your_gmail_address@gmail.com
+SMTP_PASS=your_16_character_app_password
+EMAIL_FROM=Food Link <your_gmail_address@gmail.com>
+EMAIL_DEV_MODE=true
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_PHONE_NUMBER=
 OTP_DEV_MODE=true
 
 ADMIN_EMAIL=admin@foodlink.org
@@ -1164,12 +1174,21 @@ The output is in `client/dist/`.
 | `CLOUDINARY_CLOUD_NAME` | — | Optional | Image storage |
 | `CLOUDINARY_API_KEY` | — | Optional | Image storage |
 | `CLOUDINARY_API_SECRET` | — | Optional | Image storage |
-| `MSG91_AUTH_KEY` | — | Optional | SMS OTP |
-| `MSG91_TEMPLATE_ID` | — | Optional | SMS OTP template |
-| `MSG91_SENDER_ID` | `FDLINK` | Optional | SMS sender |
+| `SMTP_HOST` | `smtp.gmail.com` | Optional | Gmail SMTP server |
+| `SMTP_PORT` | `587` | Optional | 587 (STARTTLS) or 465 (TLS) |
+| `SMTP_SECURE` | `false` | Optional | `true` for port 465 |
+| `SMTP_USER` | — | Optional | Gmail address |
+| `SMTP_PASS` | — | Optional | 16-character Gmail App Password |
+| `EMAIL_FROM` | `Food Link <SMTP_USER>` | Optional | Gmail address or verified alias |
+| `EMAIL_DEV_MODE` | `true` | No | Log emails instead of sending |
+| `TWILIO_ACCOUNT_SID` | — | Optional | SMS OTP |
+| `TWILIO_AUTH_TOKEN` | — | Optional | SMS OTP |
+| `TWILIO_PHONE_NUMBER` | — | Optional | E.164 SMS sender |
+| `TWILIO_MESSAGING_SERVICE_SID` | — | Optional | Alternative to `TWILIO_PHONE_NUMBER` |
+| `SMS_DEV_MODE` | `true` | No | Log SMS instead of sending |
 | `OTP_EXPIRY_MINUTES` | `5` | Not wired yet | Declared but hardcoded in `otp.service.js` |
 | `OTP_RESEND_COOLDOWN_SECONDS` | `60` | Not wired yet | Declared but hardcoded |
-| `OTP_DEV_MODE` | `true` | No | Force dev OTP behavior |
+| `OTP_DEV_MODE` | `true` | No | Return OTP codes in API responses (dev only) |
 
 ### 13.2 Client (`client/.env`)
 
@@ -1243,7 +1262,7 @@ Recommended production topology:
 - **Render Web Service** for `server/` with MongoDB Atlas.
 - **Render Static Site** for `client/` with `/api/*` proxied to the API.
 - `CLIENT_URL` set to the exact static site origin.
-- Cloudinary configured for images and MSG91 configured for real OTP.
+- Cloudinary configured for images, Twilio configured for real SMS, and a Gmail App Password configured for real email.
 
 Quick summary:
 
@@ -1334,11 +1353,18 @@ MongoDB is not connected. Check:
 - The Bearer fallback from `sessionStorage` should keep the current tab working; a new tab may need login if the cookie is blocked.
 - Use the rewrite setup for reliable cookie sessions.
 
-### OTP is not received
+### SMS OTP is not received
 
 - If `OTP_DEV_MODE=true`, read the code from the modal.
-- Otherwise verify `MSG91_AUTH_KEY`, `MSG91_TEMPLATE_ID`, and `MSG91_SENDER_ID`.
+- Otherwise verify `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_PHONE_NUMBER` (or `TWILIO_MESSAGING_SERVICE_SID`).
+- For Indian numbers, enable the India geo-permission and complete DLT requirements in Twilio.
 - Check Render logs for the dispatch warning.
+
+### Email is not received
+
+- Verify `SMTP_USER` and `SMTP_PASS` (a Gmail App Password, not your normal password), and make sure `EMAIL_FROM` matches the Gmail address or a verified alias.
+- In dev mode (`EMAIL_DEV_MODE=true`), read the code/link from the server console.
+- Check Render logs for SMTP authentication errors.
 
 ### Images are missing after restart
 

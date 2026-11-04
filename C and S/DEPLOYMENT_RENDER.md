@@ -19,7 +19,8 @@ Browser
   └── https://foodlink-api.onrender.com  (Web Service / Express)
            ├── MongoDB Atlas
            ├── Cloudinary (images)
-           ├── MSG91 (SMS OTP)
+           ├── Gmail SMTP (email verification, password reset, donation codes)
+           ├── Twilio (SMS OTP)
            └── Google Identity Services (OAuth)
 ```
 
@@ -34,7 +35,7 @@ Browser
 3. [Create MongoDB Atlas](#3-create-mongodb-atlas)
 4. [Optional: Cloudinary](#4-optional-cloudinary)
 5. [Optional: Google OAuth](#5-optional-google-oauth)
-6. [Optional: MSG91 SMS OTP](#6-optional-msg91-sms-otp)
+6. [Optional: Gmail SMTP + Twilio SMS](#6-optional-gmail-smtp--twilio-sms)
 7. [Deploy the backend Web Service](#7-deploy-the-backend-web-service)
 8. [Deploy the frontend Static Site](#8-deploy-the-frontend-static-site)
 9. [Connect the frontend to the API](#9-connect-the-frontend-to-the-api)
@@ -57,12 +58,13 @@ Browser
 - Optional accounts:
   - [Cloudinary](https://cloudinary.com/) — persistent image uploads.
   - [Google Cloud Console](https://console.cloud.google.com/) — Google sign-in.
-  - [MSG91](https://msg91.com/) — real SMS OTP delivery.
+  - Gmail account with 2-Step Verification + an App Password — verification, password-reset and donation-code emails.
+  - [Twilio](https://www.twilio.com/) — SMS OTP for donors and receivers.
 - Node.js 18+ locally if you want to run the seed scripts (Node 22 recommended).
 
 > **Without Cloudinary:** uploaded images are converted to base64 data URIs and stored inside MongoDB. This works for a demo but bloats documents. Configure Cloudinary for any real use.
 >
-> **Without MSG91:** OTP falls back to development mode and the 6-digit code is returned to the browser (and shown in the OTP modal). This is convenient for a demo but **must not** be used for a public production launch.
+> **Without Gmail SMTP or Twilio:** email/SMS falls back to development mode and codes are logged on the server (and shown in the relevant modal). This is convenient for a demo but **must not** be used for a public production launch.
 
 ---
 
@@ -155,22 +157,72 @@ Images are uploaded to the `foodlink/listings` folder with automatic resizing an
 
 ---
 
-## 6. Optional: MSG91 SMS OTP
+## 6. Optional: Gmail SMTP + Twilio SMS
 
-1. Create an MSG91 account and an **OTP template**.
-2. Copy:
-   - Auth key
-   - Template ID
-   - Sender ID (e.g. `FDLINK`)
+Both integrations are optional for a local demo but **required** for a real launch.
+
+### 6a. Gmail SMTP (transactional email)
+
+1. Enable **2-Step Verification** on the Google account you want to send from.
+2. Google Account → Security → **App passwords** → create one for "Mail".
 3. Set on the API service:
-   - `MSG91_AUTH_KEY`
-   - `MSG91_TEMPLATE_ID`
-   - `MSG91_SENDER_ID`
-   - `OTP_DEV_MODE=false`
 
-> If you intentionally want the demo OTP flow, set `OTP_DEV_MODE=true` and leave the MSG91 key empty. The OTP is returned in the API response and shown in the verification modal.
+   ```text
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_SECURE=false
+   SMTP_USER=you@gmail.com
+   SMTP_PASS=the_16_character_app_password
+   EMAIL_FROM=Food Link <you@gmail.com>
+   EMAIL_DEV_MODE=false
+   ```
+
+   > `EMAIL_FROM` must be the Gmail address you authenticated with, or a verified **Send mail as** alias. Gmail limits free accounts to roughly 500 recipients/day (Workspace ~2,000), which is fine for demos and small deployments but not high-volume production.
+
+Gmail SMTP is used for:
+
+- **Signup email verification** — 6-digit code. Login is blocked until the code is entered (`403 EMAIL_NOT_VERIFIED`).
+- **Forgot password** — themed reset link to `/reset-password?token=...`.
+- **Donation handover codes** — sent to the donor when a listing is published or a code is regenerated.
+- **Pickup code fallback** — the receiver's collection code is also emailed, in case SMS delivery is delayed.
+
+### 6b. Twilio (SMS OTP)
+
+1. Create a [Twilio](https://www.twilio.com/) account.
+2. Buy or provision an SMS-capable phone number (or create a Messaging Service).
+3. Copy the **Account SID** and **Auth Token** from the Twilio Console dashboard.
+4. Set on the API service:
+
+   ```text
+   TWILIO_ACCOUNT_SID=AC...
+   TWILIO_AUTH_TOKEN=...
+   TWILIO_PHONE_NUMBER=+1...
+   # Or, instead of TWILIO_PHONE_NUMBER:
+   TWILIO_MESSAGING_SERVICE_SID=MG...
+   SMS_DEV_MODE=false
+   OTP_DEV_MODE=false
+   ```
+
+   > For Indian numbers, enable the **India SMS** geo-permission on the Twilio number and complete any DLT/regulatory requirements Twilio shows. Numbers are normalised to E.164 (`9876543210` → `+919876543210`).
+
+### 6c. How two-party collection verification works
+
+1. The donor submits a listing and confirms an SMS OTP. The server:
+   - publishes the listing,
+   - generates a unique **6-digit donation handover code** (stored hashed),
+   - shows it once in the modal and emails it to the donor.
+2. A receiver requests the food. The donor approves, then taps **Mark Ready for Pickup**. The server:
+   - generates a unique **6-digit pickup code** for the receiver,
+   - sends it by SMS (email fallback),
+   - includes it in dev-mode API responses for local testing.
+3. At handover the receiver opens **Confirm Collection** and enters **both**:
+   - their pickup code (proves they are the assigned receiver), and
+   - the donor's handover code (proves the donor released the food).
+4. Only when both match does the API mark the request **Completed**, create the `DonationRecord`, and update the impact dashboard. Wrong codes are rate-limited (5 donation-code attempts per request).
+
+> Lost a donor code? The donor can open **Donor Dashboard → Show donation code** to generate a new one. The old code stops working immediately, and the new code is emailed.
 >
-> The code currently hardcodes the OTP lifetime to 5 minutes and the resend cooldown to 60 seconds; `OTP_EXPIRY_MINUTES` and `OTP_RESEND_COOLDOWN_SECONDS` are present in `.env.example` but not wired into the service yet.
+> If email or SMS credentials are missing, set `EMAIL_DEV_MODE=true`, `SMS_DEV_MODE=true`, and `OTP_DEV_MODE=true` for a demo. Codes are then returned to the browser/console instead of being sent.
 
 ---
 
@@ -213,9 +265,22 @@ Images are uploaded to the `foodlink/listings` folder with automatic resizing an
    CLOUDINARY_CLOUD_NAME=...
    CLOUDINARY_API_KEY=...
    CLOUDINARY_API_SECRET=...
-   MSG91_AUTH_KEY=...
-   MSG91_TEMPLATE_ID=...
-   MSG91_SENDER_ID=FDLINK
+
+   # Gmail SMTP email
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_SECURE=false
+   SMTP_USER=you@gmail.com
+   SMTP_PASS=your_16_character_app_password
+   EMAIL_FROM=Food Link <you@gmail.com>
+   EMAIL_DEV_MODE=false
+
+   # Twilio SMS
+   TWILIO_ACCOUNT_SID=AC...
+   TWILIO_AUTH_TOKEN=...
+   TWILIO_PHONE_NUMBER=+1...
+   # TWILIO_MESSAGING_SERVICE_SID=MG...
+   SMS_DEV_MODE=false
    OTP_DEV_MODE=false
 
    # Used only by seed scripts
@@ -414,21 +479,27 @@ Run through this flow on the live site:
 
 1. **Home page** loads and the backend health pill shows connected (if present).
 2. **Register** a Donor account.
-3. **Log out** and log back in — the session should persist.
+   - A themed verification email should arrive. Enter the 6-digit code in the modal.
+   - Without Gmail SMTP (`EMAIL_DEV_MODE=true`), the code is shown in the modal / API response.
+3. **Log out** and log back in — the session should persist. Logging in before verification returns `EMAIL_NOT_VERIFIED` and prompts for a fresh code.
 4. **Donor dashboard → Add Food Listing**:
    - Fill the form and submit.
-   - If MSG91 is not configured, the dev OTP appears in the modal; click it to auto-fill and publish.
+   - Confirm the SMS OTP. Without Twilio, dev-mode returns the OTP in the modal.
+   - **Save the donation handover code** shown after publishing (also emailed).
    - The listing appears in **Explore Food**.
-5. **Register a Receiver** in a second browser/incognito window.
+5. **Register a Receiver** in a second browser/incognito window (verify their email too).
 6. **Explore Food → request** part of the listing.
-7. **Donor dashboard → Incoming Requests → Approve**, then **Mark Ready for Pickup**.
-8. **Receiver dashboard → Ready for Pickup → Confirm Collection**.
-9. **Impact page** should now include the completed rescue.
+7. **Donor dashboard → Incoming Requests → Approve**, then **Mark Ready for Pickup**. The receiver should get an SMS pickup code.
+8. **Receiver dashboard → Ready for Pickup → Confirm Collection**, then enter **both**:
+   - the pickup code from their SMS, and
+   - the donor's handover code (read out at handover).
+9. **Impact page** should now include the completed rescue. The request is only marked `Completed` after both codes pass.
 10. **Admin login** with the seeded admin account:
     - Overview metrics load.
     - Users, listings, and requests tabs load.
     - Suspending/reactivating a test user works.
 11. Check the **notification bell** for new-request and status-update notifications.
+12. Test **Forgot password**: the themed email should contain a link to `/reset-password?token=...`.
 
 Also check the browser console/network tab for CORS or 401 errors.
 
@@ -452,10 +523,19 @@ Also check the browser console/network tab for CORS or 401 errors.
 | `CLOUDINARY_CLOUD_NAME` | Optional | Enables persistent image uploads |
 | `CLOUDINARY_API_KEY` | Optional | |
 | `CLOUDINARY_API_SECRET` | Optional | |
-| `MSG91_AUTH_KEY` | Optional | Required for real SMS OTP |
-| `MSG91_TEMPLATE_ID` | Optional | |
-| `MSG91_SENDER_ID` | Optional | e.g. `FDLINK` |
-| `OTP_DEV_MODE` | No | `true` to force dev OTP; `false` in real production |
+| `SMTP_HOST` | `smtp.gmail.com` | Optional | SMTP server |
+| `SMTP_PORT` | `587` | Optional | 587 (STARTTLS) or 465 (implicit TLS) |
+| `SMTP_SECURE` | `false` | Optional | `true` for port 465 |
+| `SMTP_USER` | — | Optional | Gmail address; required for real email |
+| `SMTP_PASS` | — | Optional | 16-character Gmail App Password |
+| `EMAIL_FROM` | `Food Link <SMTP_USER>` | Optional | Must be the Gmail address or a verified alias |
+| `EMAIL_DEV_MODE` | No | `true` logs emails to the server console |
+| `TWILIO_ACCOUNT_SID` | Optional | Required for real SMS OTP |
+| `TWILIO_AUTH_TOKEN` | Optional | |
+| `TWILIO_PHONE_NUMBER` | Optional | E.164 sender, e.g. `+12025550123` |
+| `TWILIO_MESSAGING_SERVICE_SID` | Optional | Alternative to `TWILIO_PHONE_NUMBER` |
+| `SMS_DEV_MODE` | No | `true` logs SMS to the server console |
+| `OTP_DEV_MODE` | No | `true` to return OTP codes in API responses; `false` in production |
 | `OTP_EXPIRY_MINUTES` | No | Declared but currently hardcoded to 5 minutes |
 | `OTP_RESEND_COOLDOWN_SECONDS` | No | Declared but currently hardcoded to 60 seconds |
 | `ADMIN_EMAIL` | Seed only | Admin login email |
@@ -502,7 +582,7 @@ Login still works because the API returns a JWT that the client stores in `sessi
 - **Web Service cold starts:** free instances spin down after inactivity. The first request can take ~30–60 seconds. This is normal on Render's free plan.
 - **Static Sites** are free with global CDN and automatic HTTPS.
 - **MongoDB Atlas M0** is free but has storage/connection limits.
-- **Cloudinary** and **MSG91** have free tiers with their own quotas.
+- **Cloudinary** and **Twilio** have free tiers with their own quotas. Gmail SMTP is included with the Google account but has daily sending limits.
 - **Render Shell** availability depends on your plan. Use the local seeding option if the shell is unavailable.
 - Free web services may restart during deploys; no data is stored on the local filesystem, so this is safe.
 
@@ -519,7 +599,11 @@ Login still works because the API returns a JWT that the client stores in `sessi
 | `database.isConnected: false` on `/api/health` | Same as above | Fix Atlas connectivity; check Render logs |
 | Login succeeds but requests return 401 | Cookie blocked / CORS origin mismatch | Use the rewrite setup and verify `CLIENT_URL`; check `withCredentials` and HTTPS |
 | Images disappear after redeploy / Mongo documents are huge | Cloudinary not configured; images stored as base64 data URIs | Set `CLOUDINARY_*` variables |
-| OTP never arrives | MSG91 not configured or template/sender mismatch | Configure MSG91, or set `OTP_DEV_MODE=true` for a demo |
+| OTP never arrives | Twilio not configured, wrong number, or geo-permissions/DLT missing | Configure `TWILIO_*`, use E.164 numbers, or set `OTP_DEV_MODE=true` for a demo |
+| Verification/reset email never arrives | `SMTP_USER`/`SMTP_PASS` missing, App Password wrong, or `EMAIL_FROM` not the Gmail address | Set a Gmail App Password, match `EMAIL_FROM` to `SMTP_USER`, or set `EMAIL_DEV_MODE=true` for a demo; check Render logs |
+| Login returns `EMAIL_NOT_VERIFIED` | Account email has not been confirmed | Enter the 6-digit email code, or use **Resend code** in the modal |
+| "Incorrect donor handover code" at collection | Wrong code, or the donor regenerated it | Ask the donor to read the current code from their dashboard / email |
+| "No handover code yet" on old listings | Listing predates handover codes | Donor taps **Show donation code** once; the code is then generated and emailed |
 | Google button does not initialize | `VITE_GOOGLE_CLIENT_ID` missing at build time or origin not authorized | Set the variable and redeploy the static site; add the client URL to Google authorized origins |
 | Build fails at `vite: not found` | Wrong root directory or dependencies not installed | Confirm Root Directory is `C and S/client`; use `npm ci && npm run build` |
 | Build fails because of the space in `C and S` | Some tooling handles spaces poorly | Rename the folder to `c-and-s` (and update paths) or move `client`/`server` to the repo root |
@@ -548,8 +632,12 @@ Useful log locations:
 - [ ] `CLIENT_URL` set to the exact static site URL
 - [ ] Admin account seeded
 - [ ] Optional demo data seeded
-- [ ] Register/login tested
-- [ ] Listing + OTP + request + collection flow tested
+- [ ] `SMTP_USER` + Gmail App Password set, `EMAIL_FROM` matches, `EMAIL_DEV_MODE=false`
+- [ ] `TWILIO_*` credentials set (`SMS_DEV_MODE=false`, `OTP_DEV_MODE=false`)
+- [ ] Register/login tested (email verification blocks login until confirmed)
+- [ ] Forgot-password email + `/reset-password` link tested
+- [ ] Listing + SMS OTP publish + handover code tested
+- [ ] Two-party collection tested (pickup SMS code + donor handover code)
 - [ ] Impact page updates after collection
 - [ ] Admin dashboard tested
 - [ ] Google OAuth tested (if configured)

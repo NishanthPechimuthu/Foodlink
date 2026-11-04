@@ -19,6 +19,9 @@ services:
   - type: web
     name: foodlink-api
     runtime: node
+    # Render Free web services block outbound SMTP ports 25, 465, and 587.
+    # Gmail SMTP uses 465/587, so email OTP requires a paid instance or an
+    # HTTPS email API. Twilio SMS is unaffected because it uses HTTPS.
     plan: free
     branch: main
     rootDir: "C and S/server"
@@ -57,6 +60,8 @@ services:
       - key: CLOUDINARY_API_SECRET
         sync: false
 
+      - key: EMAIL_PROVIDER
+        value: auto
       - key: SMTP_HOST
         value: smtp.gmail.com
       - key: SMTP_PORT
@@ -68,6 +73,12 @@ services:
       - key: SMTP_PASS
         sync: false
       - key: EMAIL_FROM
+        sync: false
+      # HTTPS email fallback for Render Free (SMTP ports 25/465/587 are blocked).
+      # Set this in the Render dashboard; EMAIL_PROVIDER=auto will prefer it.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
         sync: false
       - key: EMAIL_DEV_MODE
         value: "false"

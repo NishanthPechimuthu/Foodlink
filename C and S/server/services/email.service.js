@@ -1,52 +1,140 @@
+import '../config/env.js';
 import nodemailer from 'nodemailer';
 import emailTemplates from '../utils/emailTemplates.js';
 
 /**
- * Gmail SMTP-backed transactional email service.
+ * Transactional email service with two delivery backends:
  *
- * Gmail requires an App Password (not your normal account password):
+ *   1. Gmail SMTP (ports 465/587) — works locally and on paid Render instances.
+ *   2. Resend HTTPS API (port 443) — works on Render Free, which blocks
+ *      outbound SMTP ports 25/465/587.
+ *
+ * Gmail SMTP requires an App Password (not your normal account password):
  *   1. Enable 2-Step Verification on the Google account.
  *   2. Google Account → Security → App passwords → create one for "Mail".
  *   3. Use the 16-character password as SMTP_PASS.
  *
- * Dev / test behaviour:
- *   When SMTP_USER / SMTP_PASS are missing, or EMAIL_DEV_MODE=true, or
- *   NODE_ENV is not "production", emails are logged to the console instead of
- *   being sent. This lets the whole verification flow be tested locally.
+ * Environment:
+ *   EMAIL_PROVIDER   auto | smtp | resend   (default: auto)
+ *                    auto = Resend when RESEND_API_KEY is set, otherwise SMTP
  *
- * Required production env:
- *   SMTP_USER     you@gmail.com
- *   SMTP_PASS     16-character Gmail App Password
- *   EMAIL_FROM    optional, defaults to "Food Link <SMTP_USER>"; must be the
- *                 Gmail address or a verified "Send mail as" alias
+ *   Gmail SMTP:
+ *     SMTP_USER      you@gmail.com
+ *     SMTP_PASS      16-character Gmail App Password
+ *     SMTP_HOST      default smtp.gmail.com
+ *     SMTP_PORT      default 587 (use 465 with SMTP_SECURE=true)
+ *     SMTP_SECURE    "true" for implicit TLS on port 465
  *
- * Optional env:
- *   SMTP_HOST     default smtp.gmail.com
- *   SMTP_PORT     default 587 (use 465 with SMTP_SECURE=true)
- *   SMTP_SECURE   "true" for implicit TLS on port 465
+ *   Resend:
+ *     RESEND_API_KEY re_...
+ *     RESEND_FROM    optional; falls back to EMAIL_FROM
+ *                    For testing, use "Food Link <onboarding@resend.dev>",
+ *                    which can only send to the Resend account owner.
+ *                    For real recipients, verify a domain in Resend and use
+ *                    "Food Link <no-reply@yourdomain.com>".
+ *
+ *   Shared:
+ *     EMAIL_FROM      optional sender; defaults to SMTP_USER or onboarding@resend.dev
+ *     EMAIL_DEV_MODE  "true" logs emails instead of sending; "false" forces real
+ *                     delivery even when NODE_ENV is not "production"
+ *
+ * IMPORTANT — Render Free plan:
+ *   Render blocks outbound traffic on ports 25, 465, and 587 for Free web
+ *   services. Use Resend (HTTPS) or upgrade the API service to a paid instance.
  */
 
-const smtpHost = process.env.SMTP_HOST?.trim() || 'smtp.gmail.com';
-const smtpPort = Number(process.env.SMTP_PORT) || 587;
-const smtpSecure = process.env.SMTP_SECURE === 'true' || smtpPort === 465;
-const smtpUser = process.env.SMTP_USER?.trim();
-const smtpPass = process.env.SMTP_PASS?.trim();
-const hasCredentials = Boolean(smtpUser && smtpPass);
+const clean = (value) => String(value || '').trim();
+const stripQuotes = (value) => clean(value).replace(/^['"]|['"]$/g, '');
+
+// Gmail App Passwords are often displayed in four groups of four characters.
+// Gmail ignores the spaces, but copying them into an env var can cause auth
+// failures in some environments, so normalise them away.
+const normalizeAppPassword = (value) => stripQuotes(value).replace(/\s+/g, '');
+
+const smtpHost = clean(process.env.SMTP_HOST) || 'smtp.gmail.com';
+const smtpPort = Number(clean(process.env.SMTP_PORT)) || 587;
+const smtpSecureEnv = clean(process.env.SMTP_SECURE).toLowerCase();
+
+// Gmail: 465 = implicit TLS, 587 = STARTTLS. Never use secure=true on 587.
+const smtpSecure =
+  smtpPort === 465 ? true : smtpPort === 587 ? false : smtpSecureEnv === 'true';
+
+const smtpUser = stripQuotes(process.env.SMTP_USER);
+const smtpPass = normalizeAppPassword(process.env.SMTP_PASS);
+const hasSmtpCredentials = Boolean(smtpUser && smtpPass);
+
+const resendApiKey = stripQuotes(process.env.RESEND_API_KEY);
+const hasResendKey = Boolean(resendApiKey);
+
+const emailProviderEnv = clean(process.env.EMAIL_PROVIDER).toLowerCase();
+const requestedProvider = ['smtp', 'resend'].includes(emailProviderEnv)
+  ? emailProviderEnv
+  : 'auto';
+
+const provider =
+  requestedProvider === 'smtp'
+    ? hasSmtpCredentials
+      ? 'smtp'
+      : 'missing'
+    : requestedProvider === 'resend'
+      ? hasResendKey
+        ? 'resend'
+        : 'missing'
+      : hasResendKey
+        ? 'resend'
+        : hasSmtpCredentials
+          ? 'smtp'
+          : 'missing';
+
+const emailDevMode = clean(process.env.EMAIL_DEV_MODE).toLowerCase();
+
+// EMAIL_DEV_MODE is authoritative when explicitly set. This prevents a missing
+// NODE_ENV (common when a Render service is created without the Blueprint) from
+// silently turning real delivery into console-only "dev" mode.
+const isDevMode =
+  emailDevMode === 'true' ||
+  (emailDevMode !== 'false' && process.env.NODE_ENV !== 'production');
 
 const fromAddress =
-  process.env.EMAIL_FROM?.trim() ||
-  (smtpUser ? `Food Link <${smtpUser}>` : 'Food Link <no-reply@localhost>');
+  (provider === 'resend' && stripQuotes(process.env.RESEND_FROM)) ||
+  stripQuotes(process.env.EMAIL_FROM) ||
+  (provider === 'resend'
+    ? 'Food Link <onboarding@resend.dev>'
+    : smtpUser
+      ? `Food Link <${smtpUser}>`
+      : 'Food Link <no-reply@localhost>');
 
-const isDevMode =
-  process.env.EMAIL_DEV_MODE === 'true' ||
-  process.env.NODE_ENV !== 'production';
+const maskEmail = (email) => {
+  const value = clean(email);
+  if (!value) return 'unset';
+
+  const [name, domain] = value.split('@');
+  if (!domain) return '***';
+  return `${name.slice(0, 2)}***@${domain}`;
+};
+
+const describeConfig = () => ({
+  mode: isDevMode ? 'development (email not sent)' : provider,
+  requestedProvider,
+  provider,
+  host: smtpHost,
+  port: smtpPort,
+  secure: smtpSecure,
+  smtpUser: smtpUser ? maskEmail(smtpUser) : 'unset',
+  smtpCredentials: hasSmtpCredentials ? 'set' : 'missing',
+  resendKey: hasResendKey ? 'set' : 'missing',
+  from: fromAddress,
+  emailDevMode: emailDevMode || 'unset',
+  nodeEnv: process.env.NODE_ENV || 'unset',
+});
 
 let transporter = null;
-if (hasCredentials) {
+if (provider === 'smtp') {
   transporter = nodemailer.createTransport({
     host: smtpHost,
     port: smtpPort,
     secure: smtpSecure,
+    requireTLS: smtpPort === 587,
     auth: {
       user: smtpUser,
       pass: smtpPass,
@@ -58,6 +146,68 @@ if (hasCredentials) {
     socketTimeout: 8_000,
   });
 }
+
+const configSummary = describeConfig();
+console.log(
+  `[Email Service] ${configSummary.mode} | provider=${configSummary.provider} smtp=${configSummary.smtpUser} resendKey=${configSummary.resendKey} from=${configSummary.from} emailDevMode=${configSummary.emailDevMode} nodeEnv=${configSummary.nodeEnv}`
+);
+
+if (process.env.RENDER && !isDevMode && provider === 'smtp') {
+  console.warn(
+    '[Email Service] Reminder: Render Free web services block outbound SMTP ports 25/465/587. ' +
+      'Set RESEND_API_KEY (EMAIL_PROVIDER=auto/resend) or upgrade the API service to a paid instance.'
+  );
+}
+
+if (provider === 'resend' && !isDevMode && /@gmail\.com/i.test(fromAddress)) {
+  console.warn(
+    '[Email Service] Resend cannot send from an @gmail.com address unless that domain is verified. ' +
+      'Set RESEND_FROM to a verified Resend sender/domain.'
+  );
+}
+
+const sendViaResend = async ({ to, subject, html, text }) => {
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${resendApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: fromAddress,
+        to: [to],
+        subject,
+        html,
+        text,
+      }),
+      signal: AbortSignal.timeout(8_000),
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      console.error('[Email Service] Resend API error:', {
+        status: response.status,
+        message: payload.message || payload.error || 'Unknown Resend error',
+      });
+      return {
+        success: false,
+        mode: 'resend',
+        status: response.status,
+        error: payload.message || payload.error || `Resend API returned ${response.status}`,
+      };
+    }
+
+    return { success: true, mode: 'resend', id: payload.id };
+  } catch (err) {
+    console.error('[Email Service] Resend request failed:', {
+      message: err.message,
+      name: err.name,
+    });
+    return { success: false, mode: 'resend', error: err.message };
+  }
+};
 
 const send = async ({ to, subject, html, text }) => {
   if (!to) return { success: false, mode: 'invalid', error: 'Recipient email is required' };
@@ -71,32 +221,110 @@ const send = async ({ to, subject, html, text }) => {
     return { success: true, mode: 'development' };
   }
 
-  if (!transporter) {
-    console.error('[Email Service] SMTP_USER / SMTP_PASS are missing in production; email not sent.');
-    return { success: false, mode: 'smtp', error: 'Email provider is not configured' };
+  if (provider === 'resend') {
+    return sendViaResend({ to, subject, html, text });
   }
 
-  try {
-    const info = await transporter.sendMail({
-      from: fromAddress,
-      to,
-      subject,
-      html,
-      text,
-    });
+  if (provider === 'smtp') {
+    if (!transporter) {
+      return { success: false, mode: 'smtp', error: 'SMTP transport is not configured' };
+    }
 
-    return { success: true, mode: 'smtp', id: info.messageId };
-  } catch (err) {
-    console.error('[Email Service] SMTP send error:', err.message);
-    return { success: false, mode: 'smtp', error: err.message };
+    try {
+      const info = await transporter.sendMail({
+        from: fromAddress,
+        to,
+        subject,
+        html,
+        text,
+      });
+
+      return { success: true, mode: 'smtp', id: info.messageId };
+    } catch (err) {
+      console.error('[Email Service] SMTP send error:', {
+        message: err.message,
+        code: err.code,
+        command: err.command,
+        response: err.response,
+      });
+      return { success: false, mode: 'smtp', error: err.message };
+    }
   }
+
+  console.error(
+    '[Email Service] No email provider is configured. Set SMTP_USER/SMTP_PASS, ' +
+      'RESEND_API_KEY, or EMAIL_DEV_MODE=true for a demo.'
+  );
+  return {
+    success: false,
+    mode: 'missing',
+    error: 'Email provider is not configured',
+  };
 };
 
 export const emailService = {
   isDevMode,
   fromAddress,
+  describeConfig,
 
   send,
+
+  /**
+   * Check the selected provider. For SMTP this opens a real connection and
+   * authenticates. For Resend it validates that the API key is present;
+   * `npm run test:email` then sends a real message to confirm delivery.
+   */
+  async verify() {
+    if (isDevMode) {
+      return {
+        success: true,
+        mode: 'development',
+        message: 'EMAIL_DEV_MODE is active, so emails are logged instead of sent.',
+      };
+    }
+
+    if (provider === 'resend') {
+      if (!hasResendKey) {
+        return { success: false, mode: 'resend', error: 'RESEND_API_KEY is missing.' };
+      }
+      return {
+        success: true,
+        mode: 'resend',
+        message: 'RESEND_API_KEY is set. Run the test email to confirm delivery.',
+      };
+    }
+
+    if (provider === 'smtp') {
+      if (!transporter) {
+        return { success: false, mode: 'smtp', error: 'SMTP transport is not configured.' };
+      }
+
+      try {
+        await transporter.verify();
+        return { success: true, mode: 'smtp', message: 'SMTP connection and authentication succeeded.' };
+      } catch (err) {
+        console.error('[Email Service] SMTP verify error:', {
+          message: err.message,
+          code: err.code,
+          command: err.command,
+          response: err.response,
+        });
+        return {
+          success: false,
+          mode: 'smtp',
+          error: err.message,
+          code: err.code,
+          response: err.response,
+        };
+      }
+    }
+
+    return {
+      success: false,
+      mode: 'missing',
+      error: 'No email provider is configured. Set SMTP credentials or RESEND_API_KEY.',
+    };
+  },
 
   async sendVerificationEmail({ to, name, code, expiresMinutes = 10 }) {
     const { subject, html } = emailTemplates.verifyEmail({ name, code, expiresMinutes });

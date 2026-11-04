@@ -153,6 +153,13 @@ export default function AddFoodModal({ isOpen, onClose, onListingCreated }) {
     setFormData(updated);
   };
 
+  const formatQuantityInput = () => {
+    const value = Number(formData.quantity);
+    if (Number.isFinite(value) && value > 0) {
+      setFormData((prev) => ({ ...prev, quantity: value.toFixed(2) }));
+    }
+  };
+
   const validate = () => {
     const newErrors = {};
 
@@ -160,8 +167,8 @@ export default function AddFoodModal({ isOpen, onClose, onListingCreated }) {
       newErrors.title = 'Food title is required';
     }
 
-    if (!formData.quantity || Number(formData.quantity) <= 0) {
-      newErrors.quantity = 'Quantity must be greater than zero';
+    if (!formData.quantity || !Number.isFinite(Number(formData.quantity)) || Number(formData.quantity) < 0.1) {
+      newErrors.quantity = 'Quantity must be at least 0.1';
     }
 
     if (!formData.preparedAt) {
@@ -210,7 +217,7 @@ export default function AddFoodModal({ isOpen, onClose, onListingCreated }) {
     try {
       const payload = {
         ...formData,
-        quantity: Number(formData.quantity),
+        quantity: Number(Number(formData.quantity).toFixed(2)),
         images: imageUrlInput.trim() ? [imageUrlInput.trim()] : formData.images,
       };
 
@@ -326,20 +333,26 @@ export default function AddFoodModal({ isOpen, onClose, onListingCreated }) {
                   </label>
                   <input
                     type="number"
-                    step="0.5"
+                    step="0.01"
                     min="0.1"
+                    inputMode="decimal"
                     value={formData.quantity}
+                    onBlur={formatQuantityInput}
                     onChange={(e) => {
                       setFormData({ ...formData, quantity: e.target.value });
                       if (errors.quantity) setErrors({ ...errors, quantity: null });
                     }}
-                    placeholder="e.g. 25"
+                    placeholder="e.g. 25.00"
                     className={`w-full px-3.5 py-2.5 rounded-xl bg-cream-50 border text-sm text-chocolate focus:outline-none focus:ring-2 transition-all ${
                       errors.quantity ? 'border-softRed' : 'border-chocolate/15 focus:border-burntOrange'
                     }`}
                   />
-                  {errors.quantity && (
+                  {errors.quantity ? (
                     <p className="mt-1 text-xs text-softRed font-semibold">{errors.quantity}</p>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-chocolate/55">
+                      Whole numbers display as .00; up to two decimal places are allowed.
+                    </p>
                   )}
                 </div>
 

@@ -157,11 +157,13 @@ Images are uploaded to the `foodlink/listings` folder with automatic resizing an
 
 ---
 
-## 6. Optional: Gmail SMTP + Twilio SMS
+## 6. Optional: Email + Twilio SMS
 
-Both integrations are optional for a local demo but **required** for a real launch.
+Email and SMS are optional for a local demo but **required** for a real launch.
 
 ### 6a. Gmail SMTP (transactional email)
+
+For local development or a **paid** Render instance.
 
 1. Enable **2-Step Verification** on the Google account you want to send from.
 2. Google Account → Security → **App passwords** → create one for "Mail".
@@ -179,14 +181,73 @@ Both integrations are optional for a local demo but **required** for a real laun
 
    > `EMAIL_FROM` must be the Gmail address you authenticated with, or a verified **Send mail as** alias. Gmail limits free accounts to roughly 500 recipients/day (Workspace ~2,000), which is fine for demos and small deployments but not high-volume production.
 
-Gmail SMTP is used for:
+   > **Render Free plan limitation:** Render blocks outbound traffic on ports **25, 465, and 587** for Free web services. Gmail SMTP uses 465/587, so email OTP and password-reset emails will **not send** from a Free API instance. Twilio SMS still works because it uses HTTPS. To keep Gmail SMTP, upgrade the API service to a paid instance. To stay on Free, use the **Resend HTTPS fallback** in section 6b.
+   >
+   > Diagnose the server-side configuration with:
+   >
+   > ```bash
+   > cd "C and S/server"
+   > npm run test:email -- your-address@example.com
+   > ```
+   >
+   > The command prints the effective host/port/mode (passwords masked) and the exact SMTP error.
+
+Email is used for:
 
 - **Signup email verification** — 6-digit code. Login is blocked until the code is entered (`403 EMAIL_NOT_VERIFIED`).
 - **Forgot password** — themed reset link to `/reset-password?token=...`.
 - **Donation handover codes** — sent to the donor when a listing is published or a code is regenerated.
 - **Pickup code fallback** — the receiver's collection code is also emailed, in case SMS delivery is delayed.
 
-### 6b. Twilio (SMS OTP)
+### 6b. Resend HTTPS fallback (Render Free)
+
+Resend sends over HTTPS (port 443), so it works on Render's Free plan. Keep the
+Gmail SMTP values above for local development; `EMAIL_PROVIDER=auto` uses Resend
+only when `RESEND_API_KEY` is set.
+
+1. Create a [Resend](https://resend.com/) account and an API key at
+   [resend.com/api-keys](https://resend.com/api-keys).
+2. For a quick test, set on the API service:
+
+   ```text
+   EMAIL_PROVIDER=auto
+   RESEND_API_KEY=re_your_real_key
+   RESEND_FROM=Food Link <onboarding@resend.dev>
+   EMAIL_DEV_MODE=false
+   ```
+
+   > `onboarding@resend.dev` can only send to the email address that owns the
+   > Resend account. It is useful for testing the OTP flow, but it cannot email
+   > arbitrary users.
+
+3. For real users, add and verify your domain in Resend (Resend shows the DNS
+   records), then use an address on that domain:
+
+   ```text
+   RESEND_FROM=Food Link <no-reply@yourdomain.com>
+   ```
+
+   > `RESEND_FROM` takes precedence over `EMAIL_FROM` when Resend is active.
+   > An `@gmail.com` sender will **not** work with Resend unless that domain is
+   > verified, which Gmail does not allow.
+
+4. To force a provider, set `EMAIL_PROVIDER=smtp` or `EMAIL_PROVIDER=resend`.
+   With `auto`, a Resend key wins over SMTP credentials.
+
+5. Confirm the deployed configuration in the Render logs:
+
+   ```text
+   [Email Service] resend | provider=resend ... from=Food Link <no-reply@yourdomain.com>
+   ```
+
+   Then send a real test email:
+
+   ```bash
+   cd "C and S/server"
+   npm run test:email -- your-address@example.com
+   ```
+
+### 6c. Twilio (SMS OTP)
 
 1. Create a [Twilio](https://www.twilio.com/) account.
 2. Buy or provision an SMS-capable phone number (or create a Messaging Service).
@@ -205,7 +266,7 @@ Gmail SMTP is used for:
 
    > For Indian numbers, enable the **India SMS** geo-permission on the Twilio number and complete any DLT/regulatory requirements Twilio shows. Numbers are normalised to E.164 (`9876543210` → `+919876543210`).
 
-### 6c. How two-party collection verification works
+### 6d. How two-party collection verification works
 
 1. The donor submits a listing and confirms an SMS OTP. The server:
    - publishes the listing,
@@ -600,7 +661,7 @@ Login still works because the API returns a JWT that the client stores in `sessi
 | Login succeeds but requests return 401 | Cookie blocked / CORS origin mismatch | Use the rewrite setup and verify `CLIENT_URL`; check `withCredentials` and HTTPS |
 | Images disappear after redeploy / Mongo documents are huge | Cloudinary not configured; images stored as base64 data URIs | Set `CLOUDINARY_*` variables |
 | OTP never arrives | Twilio not configured, wrong number, or geo-permissions/DLT missing | Configure `TWILIO_*`, use E.164 numbers, or set `OTP_DEV_MODE=true` for a demo |
-| Verification/reset email never arrives | `SMTP_USER`/`SMTP_PASS` missing, App Password wrong, or `EMAIL_FROM` not the Gmail address | Set a Gmail App Password, match `EMAIL_FROM` to `SMTP_USER`, or set `EMAIL_DEV_MODE=true` for a demo; check Render logs |
+| Verification/reset email never arrives | **Render Free blocks SMTP ports 25/465/587**, or `SMTP_USER`/`SMTP_PASS` is missing/wrong, or `EMAIL_FROM` is not the Gmail address | Set `RESEND_API_KEY` and `RESEND_FROM` (section 6b), or use a paid Render instance; verify with `npm run test:email -- you@example.com`; check Render logs |
 | Login returns `EMAIL_NOT_VERIFIED` | Account email has not been confirmed | Enter the 6-digit email code, or use **Resend code** in the modal |
 | "Incorrect donor handover code" at collection | Wrong code, or the donor regenerated it | Ask the donor to read the current code from their dashboard / email |
 | "No handover code yet" on old listings | Listing predates handover codes | Donor taps **Show donation code** once; the code is then generated and emailed |

@@ -584,7 +584,7 @@ export const forgotPassword = async (req, res, next) => {
       await user.save();
     }
 
-    // 4. Email the reset link using the themed Gmail SMTP template
+    // 4. Email the reset link using the themed Brevo SMTP template
     const clientBaseUrl = (process.env.CLIENT_URL || 'http://localhost:5173').replace(/\/+$/, '');
     const resetUrl = `${clientBaseUrl}/reset-password?token=${resetToken}`;
 

@@ -115,7 +115,7 @@ export default function RegisterPage() {
         password: formData.password,
       });
 
-      // New accounts must confirm the 6-digit code emailed via Gmail SMTP
+      // New accounts must confirm the 6-digit code emailed via Brevo SMTP
       // before they can sign in.
       if (data.requiresEmailVerification) {
         setVerificationEmail(data.email || formData.email.trim());

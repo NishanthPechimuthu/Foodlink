@@ -41,7 +41,7 @@
 | **Backend** | Node.js + Express 4 + Mongoose 8 |
 | **Database** | MongoDB Atlas |
 | **Authentication** | JWT (HttpOnly cookie + Bearer fallback), bcrypt, Google OAuth |
-| **External services** | Cloudinary (images), Twilio (SMS OTP), Gmail SMTP (transactional email), Google Identity Services, Leaflet/OpenStreetMap |
+| **External services** | Cloudinary (images), Twilio (SMS OTP), Brevo SMTP (transactional email), Google Identity Services, Leaflet/OpenStreetMap |
 | **Repository layout** | Monorepo: `client/` and `server/` under the `C and S` folder |
 
 ### Problems it solves
@@ -176,7 +176,7 @@ Fonts loaded in `client/index.html`:
 | `cloudinary` | 2.5 | Image storage |
 | `google-auth-library` | 9.15 | Google ID token verification |
 | `twilio` | 6.x | SMS OTP delivery |
-| `nodemailer` | 10.x | Gmail SMTP email (verification, reset, handover codes) |
+| `nodemailer` | 10.x | Brevo SMTP email (verification, reset, handover codes) |
 | `dotenv` | 16.4 | Environment variables |
 | `nodemon` | 3.1 (dev) | Auto-restart in development |
 
@@ -187,7 +187,7 @@ Fonts loaded in `client/index.html`:
 | MongoDB Atlas | All persistent data | In-memory user store only (not durable); other routes return 503 |
 | Cloudinary | Listing images | Base64 data URI stored in MongoDB |
 | Twilio | SMS OTP | OTP returned to client in development/dev mode |
-| Gmail SMTP | Email verification, password reset, handover codes | Code/link logged to server console in dev mode |
+| Brevo SMTP | Email verification, password reset, handover codes | Code/link logged to server console in dev mode |
 | Google Identity Services | Google sign-in | Simulated dev token flow in the UI |
 | OpenStreetMap tiles | Maps | No fallback (map requires network) |
 
@@ -211,7 +211,7 @@ flowchart LR
         DB[(MongoDB Atlas)]
         CL[Cloudinary]
         SMS[Twilio SMS]
-        MAIL[Gmail SMTP]
+        MAIL[Brevo SMTP]
         GOOG[Google Identity]
         OSM[OpenStreetMap tiles]
     end
@@ -1018,7 +1018,7 @@ Supporting animation components: `DonorHand`, `ReceiverHand`, `DonationBasket`, 
 - Node.js 18+ (Node 22 recommended)
 - npm
 - MongoDB (local or Atlas) for database-backed features
-- Optional: Cloudinary, Twilio, a Gmail account with an App Password, Google OAuth credentials
+- Optional: Cloudinary, Twilio, a Brevo account with an SMTP key and verified sender, Google OAuth credentials
 
 ### 12.2 Install
 
@@ -1063,12 +1063,12 @@ GOOGLE_CLIENT_SECRET=your_google_client_secret
 CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
 CLOUDINARY_API_KEY=your_cloudinary_api_key
 CLOUDINARY_API_SECRET=your_cloudinary_api_secret
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=your_gmail_address@gmail.com
-SMTP_PASS=your_16_character_app_password
-EMAIL_FROM=Food Link <your_gmail_address@gmail.com>
+BREVO_SMTP_HOST=smtp-relay.brevo.com
+BREVO_SMTP_PORT=2525
+BREVO_SMTP_SECURE=false
+BREVO_SMTP_USER=your_brevo_smtp_login
+BREVO_SMTP_PASS=your_brevo_smtp_key
+BREVO_FROM=Food Link <no-reply@yourdomain.com>
 EMAIL_DEV_MODE=true
 TWILIO_ACCOUNT_SID=
 TWILIO_AUTH_TOKEN=
@@ -1174,12 +1174,12 @@ The output is in `client/dist/`.
 | `CLOUDINARY_CLOUD_NAME` | — | Optional | Image storage |
 | `CLOUDINARY_API_KEY` | — | Optional | Image storage |
 | `CLOUDINARY_API_SECRET` | — | Optional | Image storage |
-| `SMTP_HOST` | `smtp.gmail.com` | Optional | Gmail SMTP server |
-| `SMTP_PORT` | `587` | Optional | 587 (STARTTLS) or 465 (TLS) |
-| `SMTP_SECURE` | `false` | Optional | `true` for port 465 |
-| `SMTP_USER` | — | Optional | Gmail address |
-| `SMTP_PASS` | — | Optional | 16-character Gmail App Password |
-| `EMAIL_FROM` | `Food Link <SMTP_USER>` | Optional | Gmail address or verified alias |
+| `BREVO_SMTP_HOST` | `smtp-relay.brevo.com` | Optional | Brevo SMTP server |
+| `BREVO_SMTP_PORT` | `2525` | Optional | `2525` on Render Free; `587` STARTTLS elsewhere |
+| `BREVO_SMTP_SECURE` | `false` | Optional | `true` for port 465 |
+| `BREVO_SMTP_USER` | — | Optional | Brevo SMTP login |
+| `BREVO_SMTP_PASS` | — | Optional | Brevo SMTP key (not an API key) |
+| `BREVO_FROM` | — | Optional | Verified Brevo sender address |
 | `EMAIL_DEV_MODE` | `true` | No | Log emails instead of sending |
 | `TWILIO_ACCOUNT_SID` | — | Optional | SMS OTP |
 | `TWILIO_AUTH_TOKEN` | — | Optional | SMS OTP |
@@ -1262,7 +1262,7 @@ Recommended production topology:
 - **Render Web Service** for `server/` with MongoDB Atlas.
 - **Render Static Site** for `client/` with `/api/*` proxied to the API.
 - `CLIENT_URL` set to the exact static site origin.
-- Cloudinary configured for images, Twilio configured for real SMS, and a Gmail App Password configured for real email.
+- Cloudinary configured for images, Twilio configured for real SMS, and Brevo SMTP configured for real email.
 
 Quick summary:
 
@@ -1362,7 +1362,8 @@ MongoDB is not connected. Check:
 
 ### Email is not received
 
-- Verify `SMTP_USER` and `SMTP_PASS` (a Gmail App Password, not your normal password), and make sure `EMAIL_FROM` matches the Gmail address or a verified alias.
+- Verify `BREVO_SMTP_USER` and `BREVO_SMTP_PASS` (an SMTP key, not a Brevo API key), and make sure `BREVO_FROM` is a verified sender or domain in Brevo.
+- On Render Free, keep `BREVO_SMTP_PORT=2525`; ports 25/465/587 are blocked.
 - In dev mode (`EMAIL_DEV_MODE=true`), read the code/link from the server console.
 - Check Render logs for SMTP authentication errors.
 

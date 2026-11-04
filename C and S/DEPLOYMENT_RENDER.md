@@ -19,7 +19,7 @@ Browser
   └── https://foodlink-api.onrender.com  (Web Service / Express)
            ├── MongoDB Atlas
            ├── Cloudinary (images)
-           ├── Gmail SMTP (email verification, password reset, donation codes)
+           ├── Brevo SMTP (email verification, password reset, donation codes)
            ├── Twilio (SMS OTP)
            └── Google Identity Services (OAuth)
 ```
@@ -35,7 +35,7 @@ Browser
 3. [Create MongoDB Atlas](#3-create-mongodb-atlas)
 4. [Optional: Cloudinary](#4-optional-cloudinary)
 5. [Optional: Google OAuth](#5-optional-google-oauth)
-6. [Optional: Gmail SMTP + Twilio SMS](#6-optional-gmail-smtp--twilio-sms)
+6. [Optional: Brevo SMTP + Twilio SMS](#6-optional-brevo-smtp--twilio-sms)
 7. [Deploy the backend Web Service](#7-deploy-the-backend-web-service)
 8. [Deploy the frontend Static Site](#8-deploy-the-frontend-static-site)
 9. [Connect the frontend to the API](#9-connect-the-frontend-to-the-api)
@@ -58,13 +58,13 @@ Browser
 - Optional accounts:
   - [Cloudinary](https://cloudinary.com/) — persistent image uploads.
   - [Google Cloud Console](https://console.cloud.google.com/) — Google sign-in.
-  - Gmail account with 2-Step Verification + an App Password — verification, password-reset and donation-code emails.
+  - Brevo account with a verified sender/domain and an SMTP key — verification, password-reset and donation-code emails.
   - [Twilio](https://www.twilio.com/) — SMS OTP for donors and receivers.
 - Node.js 18+ locally if you want to run the seed scripts (Node 22 recommended).
 
 > **Without Cloudinary:** uploaded images are converted to base64 data URIs and stored inside MongoDB. This works for a demo but bloats documents. Configure Cloudinary for any real use.
 >
-> **Without Gmail SMTP or Twilio:** email/SMS falls back to development mode and codes are logged on the server (and shown in the relevant modal). This is convenient for a demo but **must not** be used for a public production launch.
+> **Without Brevo SMTP or Twilio:** email/SMS falls back to development mode and codes are logged on the server (and shown in the relevant modal). This is convenient for a demo but **must not** be used for a public production launch.
 
 ---
 
@@ -157,40 +157,55 @@ Images are uploaded to the `foodlink/listings` folder with automatic resizing an
 
 ---
 
-## 6. Optional: Email + Twilio SMS
+## 6. Optional: Brevo SMTP + Twilio SMS
 
 Email and SMS are optional for a local demo but **required** for a real launch.
 
-### 6a. Gmail SMTP (transactional email)
+### 6a. Brevo SMTP (transactional email)
 
-For local development or a **paid** Render instance.
+Brevo is the only email provider. On Render Free, use **port 2525** because
+Render blocks outbound SMTP ports 25, 465, and 587.
 
-1. Enable **2-Step Verification** on the Google account you want to send from.
-2. Google Account → Security → **App passwords** → create one for "Mail".
-3. Set on the API service:
+1. Create a [Brevo](https://www.brevo.com/) account.
+2. Verify a sender address or authenticate your domain under **Senders,
+   Domains & Dedicated IPs** in Brevo. Transactional email cannot send from an
+   unverified sender.
+3. Open **Settings → SMTP & API → SMTP**:
+   - Generate an **SMTP key** (not an API key).
+   - Copy the **SMTP login** shown there. It may be your Brevo account email or
+     an automatically generated `[ID]@smtp-brevo.com` address.
+4. Set on the API service:
 
    ```text
-   SMTP_HOST=smtp.gmail.com
-   SMTP_PORT=587
-   SMTP_SECURE=false
-   SMTP_USER=you@gmail.com
-   SMTP_PASS=the_16_character_app_password
-   EMAIL_FROM=Food Link <you@gmail.com>
+   BREVO_SMTP_HOST=smtp-relay.brevo.com
+   BREVO_SMTP_PORT=2525
+   BREVO_SMTP_SECURE=false
+   BREVO_SMTP_USER=your_smtp_login
+   BREVO_SMTP_PASS=your_smtp_key
+   BREVO_FROM=Food Link <no-reply@yourdomain.com>
    EMAIL_DEV_MODE=false
    ```
 
-   > `EMAIL_FROM` must be the Gmail address you authenticated with, or a verified **Send mail as** alias. Gmail limits free accounts to roughly 500 recipients/day (Workspace ~2,000), which is fine for demos and small deployments but not high-volume production.
-
-   > **Render Free plan limitation:** Render blocks outbound traffic on ports **25, 465, and 587** for Free web services. Gmail SMTP uses 465/587, so email OTP and password-reset emails will **not send** from a Free API instance. Twilio SMS still works because it uses HTTPS. To keep Gmail SMTP, upgrade the API service to a paid instance. To stay on Free, use the **Resend primary provider** in section 6b.
+   > - Port `2525` uses STARTTLS and is not blocked by Render Free.
+   > - Use `587` (STARTTLS) outside Render Free, or `465` with
+   >   `BREVO_SMTP_SECURE=true` for implicit TLS.
+   > - `BREVO_SMTP_PASS` must be the **SMTP key**, not a Brevo API key.
+   > - `BREVO_FROM` must be a sender address or domain verified in Brevo.
+   > - Confirm the deployed configuration in the Render logs:
    >
-   > Diagnose the server-side configuration with:
+   >   ```text
+   >   [Email Service] brevo-smtp | host=smtp-relay.brevo.com:2525 secure=false ...
+   >   ```
    >
-   > ```bash
-   > cd "C and S/server"
-   > npm run test:email -- your-address@example.com
-   > ```
+   > - Diagnose the server-side configuration with:
    >
-   > The command prints the effective host/port/mode (passwords masked) and the exact SMTP error.
+   >   ```bash
+   >   cd "C and S/server"
+   >   npm run test:email -- your-address@example.com
+   >   ```
+   >
+   >   The command prints the effective host/port/credentials status (passwords
+   >   masked) and the exact SMTP error.
 
 Email is used for:
 
@@ -199,59 +214,7 @@ Email is used for:
 - **Donation handover codes** — sent to the donor when a listing is published or a code is regenerated.
 - **Pickup code fallback** — the receiver's collection code is also emailed, in case SMS delivery is delayed.
 
-### 6b. Resend primary (Render Free)
-
-Resend sends over HTTPS (port 443), so it works on Render's Free plan. It is the
-**primary provider by default** (`EMAIL_PROVIDER=resend`). If Resend fails and
-Gmail SMTP credentials are present, the service automatically retries over SMTP.
-Keep the Gmail SMTP values above for local development or paid deployments.
-
-1. Create a [Resend](https://resend.com/) account and an API key at
-   [resend.com/api-keys](https://resend.com/api-keys).
-2. For a quick test, set on the API service:
-
-   ```text
-   EMAIL_PROVIDER=resend
-   RESEND_API_KEY=re_your_real_key
-   RESEND_FROM=Food Link <onboarding@resend.dev>
-   EMAIL_DEV_MODE=false
-   ```
-
-   > `onboarding@resend.dev` can only send to the email address that owns the
-   > Resend account. It is useful for testing the OTP flow, but it cannot email
-   > arbitrary users.
-
-3. For real users, add and verify your domain in Resend (Resend shows the DNS
-   records), then use an address on that domain:
-
-   ```text
-   RESEND_FROM=Food Link <no-reply@yourdomain.com>
-   ```
-
-   > `RESEND_FROM` takes precedence over `EMAIL_FROM` when Resend is active.
-   > An `@gmail.com` sender will **not** work with Resend unless that domain is
-   > verified, which Gmail does not allow.
-
-4. Provider modes:
-   - `resend` (default): Resend primary, Gmail SMTP fallback.
-   - `auto`: Resend when `RESEND_API_KEY` is set, otherwise Gmail SMTP; the
-     same fallback applies.
-   - `smtp`: Gmail SMTP only.
-
-5. Confirm the deployed configuration in the Render logs:
-
-   ```text
-   [Email Service] resend | provider=resend fallback=smtp ... from=Food Link <no-reply@yourdomain.com>
-   ```
-
-   Then send a real test email:
-
-   ```bash
-   cd "C and S/server"
-   npm run test:email -- your-address@example.com
-   ```
-
-### 6c. Twilio (SMS OTP)
+### 6b. Twilio (SMS OTP)
 
 1. Create a [Twilio](https://www.twilio.com/) account.
 2. Buy or provision an SMS-capable phone number (or create a Messaging Service).
@@ -270,7 +233,7 @@ Keep the Gmail SMTP values above for local development or paid deployments.
 
    > For Indian numbers, enable the **India SMS** geo-permission on the Twilio number and complete any DLT/regulatory requirements Twilio shows. Numbers are normalised to E.164 (`9876543210` → `+919876543210`).
 
-### 6d. How two-party collection verification works
+### 6c. How two-party collection verification works
 
 1. The donor submits a listing and confirms an SMS OTP. The server:
    - publishes the listing,
@@ -331,13 +294,13 @@ Keep the Gmail SMTP values above for local development or paid deployments.
    CLOUDINARY_API_KEY=...
    CLOUDINARY_API_SECRET=...
 
-   # Gmail SMTP email
-   SMTP_HOST=smtp.gmail.com
-   SMTP_PORT=587
-   SMTP_SECURE=false
-   SMTP_USER=you@gmail.com
-   SMTP_PASS=your_16_character_app_password
-   EMAIL_FROM=Food Link <you@gmail.com>
+   # Brevo SMTP email
+   BREVO_SMTP_HOST=smtp-relay.brevo.com
+   BREVO_SMTP_PORT=2525
+   BREVO_SMTP_SECURE=false
+   BREVO_SMTP_USER=your_smtp_login
+   BREVO_SMTP_PASS=your_smtp_key
+   BREVO_FROM=Food Link <no-reply@yourdomain.com>
    EMAIL_DEV_MODE=false
 
    # Twilio SMS
@@ -545,7 +508,7 @@ Run through this flow on the live site:
 1. **Home page** loads and the backend health pill shows connected (if present).
 2. **Register** a Donor account.
    - A themed verification email should arrive. Enter the 6-digit code in the modal.
-   - Without Gmail SMTP (`EMAIL_DEV_MODE=true`), the code is shown in the modal / API response.
+   - Without Brevo SMTP (`EMAIL_DEV_MODE=true`), the code is shown in the modal / API response.
 3. **Log out** and log back in — the session should persist. Logging in before verification returns `EMAIL_NOT_VERIFIED` and prompts for a fresh code.
 4. **Donor dashboard → Add Food Listing**:
    - Fill the form and submit.
@@ -588,12 +551,12 @@ Also check the browser console/network tab for CORS or 401 errors.
 | `CLOUDINARY_CLOUD_NAME` | Optional | Enables persistent image uploads |
 | `CLOUDINARY_API_KEY` | Optional | |
 | `CLOUDINARY_API_SECRET` | Optional | |
-| `SMTP_HOST` | `smtp.gmail.com` | Optional | SMTP server |
-| `SMTP_PORT` | `587` | Optional | 587 (STARTTLS) or 465 (implicit TLS) |
-| `SMTP_SECURE` | `false` | Optional | `true` for port 465 |
-| `SMTP_USER` | — | Optional | Gmail address; required for real email |
-| `SMTP_PASS` | — | Optional | 16-character Gmail App Password |
-| `EMAIL_FROM` | `Food Link <SMTP_USER>` | Optional | Must be the Gmail address or a verified alias |
+| `BREVO_SMTP_HOST` | Optional | `smtp-relay.brevo.com` |
+| `BREVO_SMTP_PORT` | Optional | `2525` on Render Free; `587` STARTTLS elsewhere |
+| `BREVO_SMTP_SECURE` | Optional | `false` for 2525/587; `true` for 465 |
+| `BREVO_SMTP_USER` | Optional | Brevo SMTP login; required for real email |
+| `BREVO_SMTP_PASS` | Optional | Brevo SMTP key (not an API key) |
+| `BREVO_FROM` | Optional | Verified Brevo sender, e.g. `Food Link <no-reply@yourdomain.com>` |
 | `EMAIL_DEV_MODE` | No | `true` logs emails to the server console |
 | `TWILIO_ACCOUNT_SID` | Optional | Required for real SMS OTP |
 | `TWILIO_AUTH_TOKEN` | Optional | |
@@ -647,7 +610,7 @@ Login still works because the API returns a JWT that the client stores in `sessi
 - **Web Service cold starts:** free instances spin down after inactivity. The first request can take ~30–60 seconds. This is normal on Render's free plan.
 - **Static Sites** are free with global CDN and automatic HTTPS.
 - **MongoDB Atlas M0** is free but has storage/connection limits.
-- **Cloudinary** and **Twilio** have free tiers with their own quotas. Gmail SMTP is included with the Google account but has daily sending limits.
+- **Cloudinary**, **Twilio**, and **Brevo** have free tiers with their own quotas. Brevo has daily sending limits.
 - **Render Shell** availability depends on your plan. Use the local seeding option if the shell is unavailable.
 - Free web services may restart during deploys; no data is stored on the local filesystem, so this is safe.
 
@@ -665,7 +628,7 @@ Login still works because the API returns a JWT that the client stores in `sessi
 | Login succeeds but requests return 401 | Cookie blocked / CORS origin mismatch | Use the rewrite setup and verify `CLIENT_URL`; check `withCredentials` and HTTPS |
 | Images disappear after redeploy / Mongo documents are huge | Cloudinary not configured; images stored as base64 data URIs | Set `CLOUDINARY_*` variables |
 | OTP never arrives | Twilio not configured, wrong number, or geo-permissions/DLT missing | Configure `TWILIO_*`, use E.164 numbers, or set `OTP_DEV_MODE=true` for a demo |
-| Verification/reset email never arrives | **Render Free blocks SMTP ports 25/465/587**, or `SMTP_USER`/`SMTP_PASS` is missing/wrong, or `EMAIL_FROM` is not the Gmail address | Set `RESEND_API_KEY` and `RESEND_FROM` (section 6b), or use a paid Render instance; verify with `npm run test:email -- you@example.com`; check Render logs |
+| Verification/reset email never arrives | **Render Free blocks SMTP ports 25/465/587**, or the Brevo SMTP login/key is wrong, or `BREVO_FROM` is unverified | Set `BREVO_SMTP_PORT=2525`, use the **SMTP key** (not an API key), verify `BREVO_FROM` in Brevo, and run `npm run test:email -- you@example.com`; check Render logs |
 | Login returns `EMAIL_NOT_VERIFIED` | Account email has not been confirmed | Enter the 6-digit email code, or use **Resend code** in the modal |
 | "Incorrect donor handover code" at collection | Wrong code, or the donor regenerated it | Ask the donor to read the current code from their dashboard / email |
 | "No handover code yet" on old listings | Listing predates handover codes | Donor taps **Show donation code** once; the code is then generated and emailed |
@@ -697,7 +660,7 @@ Useful log locations:
 - [ ] `CLIENT_URL` set to the exact static site URL
 - [ ] Admin account seeded
 - [ ] Optional demo data seeded
-- [ ] `SMTP_USER` + Gmail App Password set, `EMAIL_FROM` matches, `EMAIL_DEV_MODE=false`
+- [ ] Brevo SMTP credentials set (`BREVO_SMTP_USER`, `BREVO_SMTP_PASS`, `BREVO_FROM`), `BREVO_SMTP_PORT=2525`, `EMAIL_DEV_MODE=false`
 - [ ] `TWILIO_*` credentials set (`SMS_DEV_MODE=false`, `OTP_DEV_MODE=false`)
 - [ ] Register/login tested (email verification blocks login until confirmed)
 - [ ] Forgot-password email + `/reset-password` link tested
